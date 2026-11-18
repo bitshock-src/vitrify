@@ -1,0 +1,36 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+List the open questions (Q-###) and the units they block
+
+Usage: vitrify questions [OPTIONS]
+
+Options:
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --all
+          Every SDD of the repository
+
+      --open
+          Only the questions not marked resolved
+
+      --json
+          Print JSON on stdout instead of text
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   the Decision Log (decisions.md, or ## Decisions & Open Questions) and the units'
+         OPEN(Q-###) markers
+Writes:  nothing
+Prints:  one line per question: `Q-001  open  blocks U-003, U-004  <text>`, then
+         `N open, M resolved`; --open lists only the open ones
+         --json: {open, resolved, questions: [{sdd, q, status, blocks, noted, text}]}
+Exit status: 0 listed, whatever is open (lint L8 is the check that fails) · 4 no SDD, or
+         several and no --sdd · 2 usage error
+Examples:
+  vitrify questions --sdd specs/calc --open
+  vitrify questions --all --json
+Procedure: vitrify brief change (answer one) · vitrify brief run (a blocker naming Q-###)

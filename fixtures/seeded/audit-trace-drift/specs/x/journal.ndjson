@@ -1,0 +1,2 @@
+{"seq":1,"at":"2026-01-01T00:00:00Z","event":"claim","unit":"U-001","actor":"w1","claim_seq":1,"sdd":"1.0.0"}
+{"seq":2,"at":"2026-01-01T00:00:00Z","event":"built","unit":"U-001","actor":"w1","claim_seq":1,"sdd":"1.0.0"}

@@ -1,0 +1,8 @@
+{
+  "findings": [
+    {
+      "check": 7,
+      "subject": "U-001"
+    }
+  ]
+}

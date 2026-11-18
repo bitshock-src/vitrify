@@ -1,0 +1,41 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Renew a held lease
+
+Usage: vitrify renew [OPTIONS] --unit <UNIT> --holder <ID>
+
+Options:
+      --unit <UNIT>
+          Unit ID, e.g. U-012
+
+      --holder <ID>
+          Lease holder identity
+
+      --lease-minutes <N>
+          Lease length in minutes
+          
+          [default: 60]
+
+      --sdd <ROOT>
+          SDD root, as a path from where the verb runs (the primary checkout or any worktree of it); default: the one SDD in the repository
+
+      --mainline <BRANCH>
+          Mainline branch the lease commit is published to (default: config mainline, else origin/HEAD, else the primary checkout's branch)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+A protocol verb for workers, the integrator and authored baselines; not run by hand while
+`vitrify run` builds the SDD.
+Reads:   the mainline head (throwaway .vitrify/tx-<pid>-<n> worktree); the unit's lease
+Writes:  a published mainline commit: claim_expires = now + lease; a renew event; the ledger
+Prints:  one JSON line: {unit, op, holder, claim_seq, claim_expires, commit, mainline}
+Exit status: 0 published · 1 git failure · 2 usage error · 4 unit missing, or not Claimed
+         by this holder · 5 lost the publish race after 3 attempts · 6 the lease has
+         already expired (renew refused: claim again)
+Config:  mainline (VITRIFY_MAINLINE), after --mainline; --lease-minutes defaults to 60
+Examples:
+  vitrify renew --unit U-003 --holder w1 --sdd specs/calc
+Procedure: vitrify brief build-unit

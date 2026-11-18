@@ -1,0 +1,97 @@
+{
+  "clean": false,
+  "contracts": [
+    {
+      "sdd": "beta",
+      "contract": "C-001",
+      "file": "specs/beta/contracts/C-001-greeting.md",
+      "kind": "pin",
+      "state": "ok",
+      "authority": {
+        "sdd": "alpha",
+        "contract": "C-001",
+        "file": "specs/alpha/contracts/C-001-greeting.md",
+        "bytes": 147
+      },
+      "bytes": 163,
+      "consumers": [
+        "U-001"
+      ],
+      "detail": null
+    },
+    {
+      "sdd": "beta",
+      "contract": "C-002",
+      "file": "specs/beta/contracts/C-002-farewell.md",
+      "kind": "pin",
+      "state": "stale",
+      "authority": {
+        "sdd": "alpha",
+        "contract": "C-002",
+        "file": "specs/alpha/contracts/C-002-farewell.md",
+        "bytes": 209
+      },
+      "bytes": 163,
+      "consumers": [
+        "U-001"
+      ],
+      "detail": "its pin 446a992352a3 is not the hash of alpha C-002's body (now 28c9da8acc97)"
+    },
+    {
+      "sdd": "beta",
+      "contract": "C-003",
+      "file": "specs/beta/contracts/C-003-ledger.md",
+      "kind": "pin",
+      "state": "missing-authority",
+      "authority": {
+        "sdd": "alpha",
+        "contract": "C-009",
+        "file": null,
+        "bytes": null
+      },
+      "bytes": 161,
+      "consumers": [
+        "U-002"
+      ],
+      "detail": "its authority cannot be found: alpha has no contract C-009"
+    },
+    {
+      "sdd": "beta",
+      "contract": "C-004",
+      "file": "specs/beta/contracts/C-004-clock.md",
+      "kind": "transcription",
+      "state": "unchecked",
+      "authority": null,
+      "bytes": 358,
+      "consumers": [
+        "U-002"
+      ],
+      "detail": "a transcription: its Producer line names no contract of this repository"
+    },
+    {
+      "sdd": "gamma",
+      "contract": "C-001",
+      "file": "specs/gamma.sdd.md",
+      "kind": "pin",
+      "state": "ok",
+      "authority": {
+        "sdd": "alpha",
+        "contract": "C-001",
+        "file": "specs/alpha/contracts/C-001-greeting.md",
+        "bytes": 147
+      },
+      "bytes": 166,
+      "consumers": [
+        "U-001"
+      ],
+      "detail": null
+    }
+  ],
+  "counts": {
+    "ok": 2,
+    "stale": 1,
+    "missing-authority": 1,
+    "invalid": 0,
+    "unchecked": 1
+  }
+}

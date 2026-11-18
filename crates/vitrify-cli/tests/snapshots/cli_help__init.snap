@@ -1,0 +1,33 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Set this machine up: ~/.vitrify/config.toml with every default, then a first probe
+
+Usage: vitrify init [OPTIONS]
+
+Options:
+      --json
+          Print JSON on stdout instead of text
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Sets up this machine, once: no other command creates ~/.vitrify/, and every other command
+refuses until this has run. Not a repository's step: run it in your own terminal.
+Reads:   git and the harness CLIs on PATH (claude, codex, opencode: one real model call
+         each, and one per role that adds flags)
+Writes:  ~/.vitrify/config.toml — every setting at its default, the harness role profiles,
+         and the probe record (the working streaming spellings); materializes the briefs,
+         schemas and templates under ~/.vitrify/
+Prints:  one `status: text` line per check, status ok, FAIL, untested or note, ending
+         `ok: recorded the probe in ~/.vitrify/config.toml`
+         --json: {green, checks: [{status, text}], harnesses: [{name, present, version,
+           headless, failure}]}
+Exit status: 0 set up, nothing failed · 2 a FAIL (git missing, a harness that does not
+         accept its spelling, a role probe that fails), or ~/.vitrify/config.toml exists
+         (vitrify probe updates it)
+Config:  VITRIFY_PROBE_TIMEOUT_SECS (per probe, default 60); VITRIFY_HOME
+Examples:
+  vitrify init
+  vitrify init --json

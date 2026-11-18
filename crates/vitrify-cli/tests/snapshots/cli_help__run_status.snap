@@ -1,0 +1,61 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Show what a run is doing, unit by unit (read-only)
+
+Usage: vitrify run status [OPTIONS]
+
+Options:
+      --follow
+          Keep watching: one line per change, until the run ends
+
+      --json
+          JSON: one object; with --follow, one event per line
+
+      --since-start
+          With --follow: first replay what the run recorded since it started
+
+      --job <JOB>
+          The run to show, by job ID (default: the latest)
+
+      --interval <INTERVAL>
+          Seconds between looks while following
+          
+          [default: 2]
+
+      --quiet-after <QUIET_AFTER>
+          Seconds without worker output before a worker is flagged quiet
+          
+          [default: 300]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Read-only: writes no file, takes no lock, runs git only with --no-optional-locks; point it at
+a live run from another terminal.
+Reads:   .vitrify/run.json (the latest job) or the --job's .vitrify/logs/<job>/: run.json,
+         gate.json, events.jsonl, report.txt, the worker logs; process liveness; each
+         worker worktree's git state and front matter
+Writes:  nothing
+Prints:  the run's state (alive, died or ended), the progress line, one line per worker
+         with its stage, the gate's step; once the run has ended, its final report under
+         Report:; warnings as `! <text>` lines.
+         Stages: reading · editing · stamped · exited · ? (unknown) while running;
+           queued · gate · integrating while integrating; else the outcome itself
+         Warnings: an empty log after --quiet-after; no output for --quiet-after; 90% of
+           worker_timeout_minutes used; a run that died, with a kill -9 -- -<pid> line for
+           each worker process group still running
+         --json, in order: job_id, pid, sdd, harness, started_at, at, state, terminated,
+           report, progress, params, workers, gate, warnings, logs
+         --follow: the view once, then one line per change until the run ends;
+           --json one event object per line; --since-start first replays events.jsonl
+Exit status: without --follow: 0 a run is shown, whatever its state · 4 no run recorded, or
+         --job names none · 2 usage error.
+         --follow exits with the followed run: 0 complete · 2 blocked · 1 error, interrupted,
+         or died · 4 no run recorded. A reader that goes away (| head) stops it with 0.
+Examples:
+  vitrify run status
+  vitrify run status --follow --job <job>
+  vitrify run status --json
+Procedure: vitrify brief run

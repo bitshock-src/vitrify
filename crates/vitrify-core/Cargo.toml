@@ -1,0 +1,25 @@
+[package]
+name = "vitrify-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core library for vitrify: SDD instance model, trace hashing, journal, ledger, audit, claims"
+readme = "README.md"
+keywords = ["sdd", "spec-driven", "ai-agents", "orchestration"]
+categories = ["development-tools"]
+# the published crate: its sources and the content it embeds; the tests read
+# fixtures at the repository root, so they run from a checkout only
+include = ["src/**/*.rs", "assets/**/*", "README.md", "LICENSE"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+tempfile = { workspace = true }

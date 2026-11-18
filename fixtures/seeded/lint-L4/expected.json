@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "check": "L4",
+      "subject": "C-001"
+    },
+    {
+      "check": "L4",
+      "subject": "U-002"
+    }
+  ]
+}

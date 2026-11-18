@@ -1,0 +1,165 @@
+# ~/.vitrify/config.toml — vitrify's configuration on this machine.
+#
+# `vitrify init` writes this file with every setting at its default, then
+# records what it probed in the [probe] tables at the end. Edit the settings
+# in place: an upgrade never changes this file. Re-run `vitrify probe`
+# rather than edit the [probe] tables; it shows what it would change and
+# asks before it writes.
+#
+# Settings resolve in this order, first match wins: command-line flags,
+# VITRIFY_* environment variables, a repository's .vitrify/config.toml
+# (which may set mainline, [run], [harness] preferred and [lint] for that
+# repository), this file.
+
+schema = 1                     # the file format version; must be 1
+
+mainline = ""                  # mainline branch; "" = origin/HEAD, the primary
+                               #   checkout's branch, then main or master
+
+[run]
+worker_cap = 4                 # max concurrent workers
+lease_minutes = 60             # claim lease
+renew_fraction = 0.25          # renew when remaining < fraction × lease
+abort_failed_waves = 2         # failed attempts of one unit before the
+                               #   escalation call; twice as many set it aside
+worker_timeout_minutes = 120   # hard wall-clock budget per worker
+gate_jobs = 0                  # Verification rows run at once;
+                               #   0 = one per CPU core, 1 = one at a time
+poll_seconds = 30              # how often an idle run re-reads mainline
+worktree_dir = ""              # "" = ~/.vitrify/worktrees/<repo>-<hash>;
+                               #   relative = from the repository root
+status_check_seconds = 270     # how often an agent operating a run checks
+                               #   `vitrify run status` when it cannot be notified
+
+[lint]
+readset_budget_bytes = 65536   # per-unit reading-set budget (bytes by design)
+
+# ------------------------------------------------------------------ harnesses
+# `preferred` is the harness `vitrify run` uses; "" = the first one the probe
+# recorded, of claude, codex, opencode.
+#
+# Role profiles: per harness CLI, the model and reasoning effort `vitrify run`
+# passes for each role. `vitrify probe` probes each role that adds flags with
+# a real one-shot call, so a model your account cannot reach fails there, not
+# mid-run.
+#
+# Roles:
+#   worker     — one per claimable unit, several in parallel, up to
+#                run.worker_timeout_minutes each. The unit is decision-complete
+#                (exact paths, signatures, algorithm), so this is clear-scope
+#                implementation: a strong coding model at moderate effort.
+#                Volume multiplies cost and wall-clock here.
+#   retry      — the worker for a unit whose earlier attempt did not land
+#                (rejected by the gate, released, timed out). It starts from
+#                that attempt's files and the reason it failed, on a unit
+#                that has already proved harder than clear-scope: the same
+#                model, one effort step up. Optional — delete a
+#                [harness.*.retry] table and retries run exactly as first
+#                attempts do.
+#   escalation — rare one-shot triage of a gate failure into a JSON verdict
+#                (retry/release/block/abort). Low volume, high stakes: the
+#                strongest model at high effort. Not the top effort tier —
+#                vendors flag it as prone to overthinking (Claude `max`) or
+#                as spawning sub-agents (Codex `ultra`), neither of which
+#                helps a single verdict.
+#
+# Per harness: `model_flag` / `effort_flag` spell the CLI's flags, with
+# {model} / {effort} substituted. Per role: `model`, `effort`, and optional
+# `args` (extra argv, verbatim). The role's argv lands after the headless
+# spelling the probe recorded, before the prompt. An empty value omits its
+# flag and leaves the harness's own default (its config, env) in force.
+# Values are passed through as-is; each CLI owns its vocabulary.
+#
+# Permissions. A worker is a headless session: nobody is there to answer a
+# permission prompt, so whatever the harness would ask about is refused. A
+# worker has to edit files and run the SDD's own commands (and `vitrify
+# trace record`) in its worktree — and `vitrify run` creates those worktrees
+# outside your repository, under ~/.vitrify/worktrees/ (the job header
+# prints the exact directory; `run.worktree_dir` moves it). If your harness
+# settings do not already allow that there, grant it per role with `args` —
+# Claude Code's `--permission-mode` or `--allowedTools`, for instance.
+# vitrify passes no permission flag of its own: how much a worker may do
+# unasked is your decision, not a default.
+#
+# Defaults researched 2026-11 against Claude Code 2.1.319, Codex CLI
+# 0.167.0, and OpenCode 1.19.5 / 2.2.5.
+
+[harness]
+preferred = ""
+
+# ---------------------------------------------------------------- Claude Code
+# --model takes an alias (fable, opus, sonnet, haiku, best) or a full ID;
+# aliases track the latest release. --effort: low|medium|high|xhigh|max.
+# Note: the CLAUDE_CODE_EFFORT_LEVEL env var outranks --effort — leave it
+# unset in the shell that launches `vitrify run`.
+[harness.claude]
+model_flag = ["--model", "{model}"]
+effort_flag = ["--effort", "{effort}"]
+
+# Opus at medium: Anthropic's default model and its recommended effort for
+# clear-scope feature work. Cheaper: model = "sonnet", effort = "high".
+[harness.claude.worker]
+model = "opus"
+effort = "medium"
+
+[harness.claude.retry]
+model = "opus"
+effort = "high"
+
+# `best` = Fable where the account has it, else Opus.
+[harness.claude.escalation]
+model = "best"
+effort = "xhigh"
+
+# ---------------------------------------------------------------------- Codex
+# -m takes a model slug (no aliases — pinned slugs age; update on new
+# releases). Effort is a config override: low|medium|high|xhigh|max|ultra
+# (GPT-6 family; gpt-6-luna lacks ultra).
+[harness.codex]
+model_flag = ["-m", "{model}"]
+effort_flag = ["-c", "model_reasoning_effort=\"{effort}\""]
+
+# Sol is OpenAI's coding workhorse; its catalog default is low, medium buys
+# multi-step reliability. Cheaper: model = "gpt-6-luna", effort = "high".
+[harness.codex.worker]
+model = "gpt-6.1-sol"
+effort = "medium"
+
+[harness.codex.retry]
+model = "gpt-6.1-sol"
+effort = "high"
+
+# Astra is OpenAI's frontier model.
+[harness.codex.escalation]
+model = "gpt-6-astra"
+effort = "xhigh"
+
+# ------------------------------------------------------------------- OpenCode
+# Models are provider/model, so pick the provider you have credentials for.
+# Effort is a provider-specific "variant":
+#   anthropic (Claude 5.x)      low | medium | high | xhigh | max
+#   openai (OpenCode 1.x)       none | low | medium | high | xhigh
+#   google (Gemini)             low | medium | high   (Flash adds minimal)
+#   openrouter and the like     mostly low | medium | high
+#
+# Spelling below is OpenCode 1.x (`--variant`). OpenCode 2.x spells the
+# variant as a model suffix — there, set each role's effort = "" and put
+# the variant in the model: model = "anthropic/claude-opus-5-5#medium".
+[harness.opencode]
+model_flag = ["--model", "{model}"]
+effort_flag = ["--variant", "{effort}"]
+
+# Alternatives: "openai/gpt-6.1-sol" + "medium".
+[harness.opencode.worker]
+model = "anthropic/claude-opus-5-5"
+effort = "medium"
+
+[harness.opencode.retry]
+model = "anthropic/claude-opus-5-5"
+effort = "high"
+
+# OpenCode has no `best` alias. With Fable access: "anthropic/claude-fable-5-1".
+# Alternatives: "openai/gpt-6-astra" + "xhigh".
+[harness.opencode.escalation]
+model = "anthropic/claude-opus-5-5"
+effort = "xhigh"

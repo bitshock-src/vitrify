@@ -1,0 +1,34 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Rewrite the derived ledger (never hand-edit it)
+
+Usage: vitrify ledger regen [OPTIONS]
+
+Options:
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --all
+          Every SDD of the repository
+
+      --check
+          Write nothing: compare the ledger on disk with a fresh derivation; exit 3 when they differ
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+A protocol verb for the integrator and authored baselines; not run by hand while
+`vitrify run` builds the SDD.
+Reads:   unit front matter; with --check, the ledger on disk
+Writes:  the working tree: ledger.md (bundle) or the ## State Ledger section (single file);
+         nothing with --check
+Prints:  the progress line, and the written path on stderr
+         --check: `ledger current (<path>)`, or the first differing line, derived and found
+Exit status: 0 written, or current · 3 --check found a difference, or no ledger · 4 no SDD,
+         or several and no --sdd · 2 usage error
+Examples:
+  vitrify ledger regen --sdd specs/calc
+  vitrify ledger regen --all --check
+Procedure: vitrify brief integrate

@@ -1,0 +1,23 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+External contracts: one SDD's pins on another's contracts, and its transcriptions
+
+Usage: vitrify pin <COMMAND>
+
+Commands:
+  list  List every external contract with its authority and state
+  sync  Rewrite stale pins from their authorities (working tree only); print the units whose trace that moved
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Subcommands: list (every external contract, its kind and state) · sync (rewrite stale pins'
+         hashes)
+Exit status: 2 without a subcommand; see each subcommand's --help
+Examples:
+  vitrify pin list --all
+  vitrify pin sync --sdd specs/beta

@@ -1,0 +1,25 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Record or verify a unit's input-trace hashes
+
+Usage: vitrify trace <COMMAND>
+
+Commands:
+  record  Compute and write the trace map into unit front matter, and stamp the unit Built or Verified
+  verify  Compare recorded hashes against current content
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Protocol verbs for workers, the integrator and authored baselines; not run by hand while
+`vitrify run` builds the SDD.
+Subcommands: record (write a unit's trace and stamp it Built or Verified) · verify (compare
+         a unit's recorded trace with its current inputs)
+Exit status: 2 without a subcommand; see each subcommand's --help
+Examples:
+  vitrify trace record --unit U-003 --stamp built --sdd specs/calc
+  vitrify trace verify --unit U-003 --json

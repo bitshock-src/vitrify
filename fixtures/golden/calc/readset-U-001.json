@@ -1,0 +1,41 @@
+{
+  "unit": "U-001",
+  "sdd": "{ROOT}/specs/calc",
+  "shape": "bundle",
+  "consumes": [
+    "C-001",
+    "C-002",
+    "C-003",
+    "C-004"
+  ],
+  "readings": [
+    {
+      "path": "{ROOT}/specs/calc/sdd.md",
+      "region": "Ground Rules"
+    },
+    {
+      "path": "{ROOT}/specs/calc/sdd.md",
+      "region": "Technology Decisions"
+    },
+    {
+      "path": "{ROOT}/specs/calc/units/U-001-foundation.md",
+      "region": null
+    },
+    {
+      "path": "{ROOT}/specs/calc/contracts/C-001-errors.md",
+      "region": null
+    },
+    {
+      "path": "{ROOT}/specs/calc/contracts/C-002-token-stream.md",
+      "region": null
+    },
+    {
+      "path": "{ROOT}/specs/calc/contracts/C-003-evaluation.md",
+      "region": null
+    },
+    {
+      "path": "{ROOT}/specs/calc/contracts/C-004-cli.md",
+      "region": null
+    }
+  ]
+}

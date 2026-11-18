@@ -1,0 +1,36 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+List every external contract with its authority and state
+
+Usage: vitrify pin list [OPTIONS]
+
+Options:
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --all
+          Every SDD of the repository
+
+      --json
+          Print JSON on stdout instead of text
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   the SDD's external contracts (Producer: external); for each pin, its authority's
+         body in the SDD that owns it
+Writes:  nothing
+Prints:  one line per contract: `beta C-001  ok  pin of alpha C-001  <file>`, a transcription
+         reading `transcription`, then `N external contracts: 2 ok · 1 stale · …`
+         States: ok · stale · missing-authority · invalid · unchecked (a transcription)
+         --json: {clean, contracts: [{sdd, contract, file, kind, state, authority, bytes,
+           consumers, detail}], counts}. kind: pin or transcription; authority:
+           {sdd, contract, file, bytes}, or null
+Exit status: 0 nothing stale, missing-authority or invalid · 2 one is, or a usage error
+         · 4 no SDD, or several and no --sdd
+Examples:
+  vitrify pin list --sdd specs/beta
+  vitrify pin list --all --json
+Procedure: vitrify brief change

@@ -1,0 +1,22 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Record a change entry's bookkeeping: journal events, Stale marks or re-recorded traces, the ledger
+
+Usage: vitrify change <COMMAND>
+
+Commands:
+  apply  Apply the last change entry of each Active SDD: the `change` event, then Stale marks (MINOR, MAJOR) or re-recorded traces (PATCH), then the ledger (working tree only)
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Subcommands: apply (a change entry's bookkeeping in one step: re-stamp or mark Stale, the
+         journal, the ledger)
+Exit status: 2 without a subcommand; see each subcommand's --help
+Examples:
+  vitrify change apply --sdd specs/calc
+  vitrify change apply --all --dry-run

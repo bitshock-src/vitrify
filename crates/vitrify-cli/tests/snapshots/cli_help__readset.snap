@@ -1,0 +1,38 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Print the ordered minimal reading set for one unit
+
+Usage: vitrify readset [OPTIONS] --unit <UNIT>
+
+Options:
+      --unit <UNIT>
+          Unit ID, e.g. U-012
+
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --json
+          Print JSON on stdout instead of text
+
+      --budget [<BYTES>]
+          Total bytes and fail over budget (default: lint.readset_budget_bytes)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   the core file's Ground Rules and Technology Decisions; the unit's entry; each
+         consumed contract, and the body a pinned contract stands for
+Writes:  nothing
+Prints:  one path per line in reading order, `  ::  <region>` for a region of a shared file
+         --json: {unit, sdd, shape, consumes, readings: [{path, region}]}
+Exit status: 0 resolved (and within budget) · 2 over the --budget limit, or a usage error
+         · 4 no SDD, unknown unit, a missing section or contract, a pin that does not
+         resolve or whose hash is not its authority's
+Config:  lint.readset_budget_bytes (VITRIFY_LINT_READSET_BUDGET_BYTES), for a bare --budget
+Examples:
+  vitrify readset --unit U-002 --sdd specs/calc
+  vitrify readset --unit U-002 --json
+  vitrify readset --unit U-002 --budget
+Procedure: vitrify brief build-unit (workers) · vitrify brief authoring (sizing a unit)

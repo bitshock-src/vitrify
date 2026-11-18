@@ -1,0 +1,49 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+The mechanical drift audit (seven checks)
+
+Usage: vitrify audit [OPTIONS]
+
+Options:
+      --json
+          Print JSON on stdout instead of text
+
+      --fix-leases
+          Return lapsed Claimed units to Ready (release event, actor audit)
+
+      --apply-stale
+          Write Stale marks for check 4–5 findings
+
+      --skip-rotten
+          Skip re-running Verified units' Verification tables
+
+      --journal
+          Append one `audit` journal event
+
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --all
+          Audit every SDD of the repository
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   the SDD, its journal, the working tree under scope_roots; check 4 runs Verified
+         units' Verification commands (sh -c from the repository root)
+Writes:  nothing by default. --fix-leases, --apply-stale and --journal edit the working tree:
+         unit front matter, journal events, the ledger
+Prints:  `audit clean (7/7 checks)`, or one `[check N] subject: cause → remediation` line
+         per finding; --all prefixes each line with the slug
+         --json: {clean, findings: [{check, subject, cause, remediation}]};
+         --all: an array of {sdd, root, clean, findings}
+Exit status: 0 clean · 2 a finding (a fixing run still exits 2: re-run to confirm), or a
+         usage error · 4 no SDD, or several and no --sdd
+Config:  run.gate_jobs (VITRIFY_RUN_GATE_JOBS), for check 4
+Examples:
+  vitrify audit --sdd specs/calc
+  vitrify audit --all --skip-rotten --json
+  vitrify audit --apply-stale --journal --sdd specs/calc
+Procedure: vitrify brief kickoff · vitrify brief integrate

@@ -1,0 +1,30 @@
+{
+  "unit": "U-001",
+  "sdd": "{ROOT}/specs/beta",
+  "shape": "bundle",
+  "consumes": [
+    "C-001"
+  ],
+  "readings": [
+    {
+      "path": "{ROOT}/specs/beta/sdd.md",
+      "region": "Ground Rules"
+    },
+    {
+      "path": "{ROOT}/specs/beta/sdd.md",
+      "region": "Technology Decisions"
+    },
+    {
+      "path": "{ROOT}/specs/beta/units/U-001-one.md",
+      "region": null
+    },
+    {
+      "path": "{ROOT}/specs/beta/contracts/C-001-greeting.md",
+      "region": null
+    },
+    {
+      "path": "{ROOT}/specs/alpha/contracts/C-001-greeting.md",
+      "region": "Surface onward"
+    }
+  ]
+}

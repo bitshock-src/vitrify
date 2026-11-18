@@ -1,0 +1,38 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Probe git and the harness CLIs again; update ~/.vitrify/config.toml after asking
+
+Usage: vitrify probe [OPTIONS]
+
+Options:
+      --json
+          Print JSON on stdout instead of text
+
+  -y, --assume-yes
+          Apply the changes without asking
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Probes the machine again — after installing or upgrading vitrify or a harness CLI, or editing
+a role profile — and brings the probe record in ~/.vitrify/config.toml up to date. Asks
+before it changes the file (-y answers yes); changes nothing else in it.
+Reads:   ~/.vitrify/config.toml (the role profiles and the probe record); git and the harness
+         CLIs on PATH (one real model call each, and one per role that adds flags)
+Writes:  the [probe] tables of ~/.vitrify/config.toml, when there is a change and you agree;
+         restores or refreshes the briefs, schemas and templates under ~/.vitrify/
+Prints:  one `status: text` line per check, status ok, FAIL, untested or note; then one
+         `change: <key>: <recorded> → <found>` line per difference, and either
+         `ok: ~/.vitrify/config.toml: no changes`, `ok: updated ~/.vitrify/config.toml (N
+         changes)`, or `note: ~/.vitrify/config.toml: nothing changed`
+         stderr: the question, `apply N changes to ~/.vitrify/config.toml? [y/N]`
+         --json: {green, checks, harnesses, changes: [{key, from, to}], applied}
+Exit status: 0 the record is up to date, nothing failed · 2 a FAIL, the changes not applied
+         (declined, or no answer on stdin), or ~/.vitrify/config.toml does not parse
+Config:  VITRIFY_PROBE_TIMEOUT_SECS (per probe, default 60); VITRIFY_HOME
+Examples:
+  vitrify probe
+  vitrify probe -y
+  vitrify probe --json --assume-yes

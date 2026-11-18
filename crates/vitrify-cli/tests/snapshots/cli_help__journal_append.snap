@@ -1,0 +1,65 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Append one event (inside mainline-bound commits only)
+
+Usage: vitrify journal append [OPTIONS] --event <KIND>
+
+Options:
+      --event <KIND>
+          The event kind
+
+          Possible values:
+          - claim:    A lease taken
+          - renew:    A lease extended
+          - release:  A lease given back
+          - built:    A unit stamped Built
+          - verified: A unit stamped Verified
+          - stale:    A unit marked Stale (with --cause)
+          - retired:  A unit retired
+          - change:   A change entry recorded (with --entry, and --stale for MINOR or MAJOR)
+          - audit:    An audit run recorded (with --findings)
+
+      --unit <UNIT>
+          Unit ID (every kind except change and audit)
+
+      --actor <ACTOR>
+          Who acted: a lease holder's identity, or the role that acted
+
+      --claim-seq <N>
+          The claim number the event belongs to (claim, renew, release)
+
+      --entry <ENTRY>
+          Change entry id (CH-###)
+
+      --stale <STALE>
+          Comma-separated unit ids (change event)
+
+      --cause <CAUSE>
+          Cause text (stale event)
+
+      --findings <N>
+          Finding count (audit event)
+
+      --commit <SHA>
+          Relevant code commit
+
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+A protocol verb for workers, the integrator and authored baselines; not run by hand while
+`vitrify run` builds the SDD. A change entry's events are vitrify change apply's.
+Reads:   the journal's last seq; the SDD's version
+Writes:  the working tree: one line appended to journal.ndjson (bundle) or the ## Journal
+         block (single file), created on first use; seq = last + 1, at = now (UTC)
+Prints:  the appended event line
+Exit status: 0 appended · 2 usage error, or a kind other than change or audit without --unit
+         · 4 no SDD, or several and no --sdd
+Examples:
+  vitrify journal append --event built --unit U-003 --actor w1 --claim-seq 2 --sdd specs/calc
+  vitrify journal append --event audit --findings 0
+Procedure: vitrify brief integrate · vitrify brief kickoff

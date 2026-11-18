@@ -1,0 +1,26 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Print the one-line progress summary
+
+Usage: vitrify ledger progress [OPTIONS]
+
+Options:
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --all
+          Every SDD of the repository
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   unit front matter
+Writes:  nothing
+Prints:  Progress: <V>/<total> Verified · <n> <Status> · … (Retired not in the total);
+         with --all one line per SDD, prefixed with its slug
+Exit status: 0 printed · 4 no SDD, or several and no --sdd · 2 usage error
+Examples:
+  vitrify ledger progress --sdd specs/calc
+  vitrify ledger progress --all

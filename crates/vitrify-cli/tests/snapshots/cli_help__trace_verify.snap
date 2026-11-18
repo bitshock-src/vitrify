@@ -1,0 +1,31 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Compare recorded hashes against current content
+
+Usage: vitrify trace verify [OPTIONS] --unit <UNIT>
+
+Options:
+      --unit <UNIT>
+          Unit ID, e.g. U-012
+
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --json
+          Print JSON on stdout instead of text
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   the unit's recorded trace and its current inputs
+Writes:  nothing
+Prints:  `U-###: trace matches`, or `U-###: STALE — mismatched keys: …`
+         --json: {unit, match, mismatches: [{key, recorded, current}]}
+Exit status: 0 matches · 3 a key differs · 4 no SDD, unknown unit, or no recorded trace
+         · 2 usage error
+Examples:
+  vitrify trace verify --unit U-003 --sdd specs/calc
+  vitrify trace verify --unit U-003 --json
+Procedure: vitrify brief integrate

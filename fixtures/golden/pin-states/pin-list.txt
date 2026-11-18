@@ -1,0 +1,6 @@
+beta C-001   ok                 pin of alpha C-001  specs/beta/contracts/C-001-greeting.md
+beta C-002   stale              pin of alpha C-002  specs/beta/contracts/C-002-farewell.md — its pin 446a992352a3 is not the hash of alpha C-002's body (now 28c9da8acc97)
+beta C-003   missing-authority  pin of alpha C-009  specs/beta/contracts/C-003-ledger.md — its authority cannot be found: alpha has no contract C-009
+beta C-004   unchecked          transcription       specs/beta/contracts/C-004-clock.md
+gamma C-001  ok                 pin of alpha C-001  specs/gamma.sdd.md
+5 external contracts: 2 ok · 1 stale · 1 missing-authority · 1 unchecked

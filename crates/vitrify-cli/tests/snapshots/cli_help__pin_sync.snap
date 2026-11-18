@@ -1,0 +1,43 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Rewrite stale pins from their authorities (working tree only); print the units whose trace that moved
+
+Usage: vitrify pin sync [OPTIONS]
+
+Options:
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --all
+          Every SDD of the repository
+
+      --dry-run
+          Print what would be synced, and the Staleness applied lines; write nothing
+
+      --json
+          Print JSON on stdout instead of text
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   as pin list; the consumers' unit traces
+Writes:  the working tree: each stale pin's hash, in its contract file. No status, journal
+         event or version: the change entry, vitrify change apply and the commit are yours.
+         Nothing with --dry-run
+Prints:  `synced beta C-002 ← alpha C-002  <file>` per pin; per consumer SDD
+         `beta: - Staleness applied: U-001 → Stale (consume C-002)`; then the count line.
+         stderr: `not synced: …` for what it cannot put right, and per consumer
+         `next: write beta's change entry around its line, then run vitrify change apply
+         --sdd specs/beta`; with --dry-run the same lines, and on stderr
+         `dry run: nothing written` in place of the next: lines
+         --json: {synced, staleness, unresolved, dry_run}
+Exit status: 0 every stale pin synced · 2 something could not be synced (a missing
+         authority, an invalid declaration), or a usage error · 4 no SDD, or several and
+         no --sdd
+Examples:
+  vitrify pin sync --sdd specs/beta
+  vitrify pin sync --all --dry-run
+  vitrify pin sync --all --json
+Procedure: vitrify brief change

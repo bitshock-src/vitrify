@@ -1,0 +1,142 @@
+//! The root help: `vitrify -h` and `vitrify --help`.
+//!
+//! clap lists subcommands under one heading, so the root command renders
+//! through [`TEMPLATE`] and these texts instead: the short variants for
+//! `-h`, the long variants for `--help`. The command lists name every
+//! command path once; `tests/cli_help.rs` holds that.
+
+/// The root help template, shared by `-h` and `--help`; the parts that
+/// differ come from `before_help`/`before_long_help` and
+/// `after_help`/`after_long_help`.
+pub const TEMPLATE: &str =
+    "{before-help}{usage-heading} {usage}\n\nOptions:\n{options}{after-help}\n";
+
+/// The one-line description, also the root command's `about`.
+pub const ABOUT: &str =
+    "vitrify — specs your coding agent builds through mechanical gates (spec-driven development)";
+
+/// `vitrify -h`, before the usage line.
+pub const BEFORE_SHORT: &str = "\
+vitrify — specs your coding agent builds through mechanical gates (spec-driven development)
+
+Start here — agents: run the procedure before changing anything under specs/
+  a new project, or a feature, from a PRD       vitrify brief authoring
+  change TDDs or SDDs, one or many              vitrify brief change
+  build an Active SDD                           vitrify brief run
+  where a build stands                          vitrify locate --units · vitrify run status
+  is the repository consistent                  vitrify check --all";
+
+/// `vitrify -h`, after the options.
+pub const AFTER_SHORT: &str = "\
+Commands, by task:
+  set up this machine      init · probe
+  procedures and formats   brief · schema show · new
+  author and check         lint · check · readset · pin list · questions
+  build and watch          run · run status · locate · ledger progress
+  change                   change apply · audit · pin sync
+  protocol verbs           claim · renew · release · trace record · trace verify ·
+                           journal append · journal replay · ledger regen
+
+Run 'vitrify --help' for commands by task, conventions and exit codes;
+'vitrify <command> --help' for what a command reads, writes and prints.";
+
+/// `vitrify --help`, before the usage line.
+pub const BEFORE_LONG: &str = "\
+vitrify — specs your coding agent builds through mechanical gates (spec-driven development)
+
+A project is described by a TDD (what to build and why) and a decision-complete
+SDD (how, cut into units with contracts and verification rows). vitrify builds
+the units in parallel with headless agent workers run through your own harness
+CLI. Work lands only through mechanical gates, and the repository is the record:
+claims, traces, the journal and the ledger live beside the spec.
+
+Start here — agents: run the procedure before changing anything under specs/
+  a whole repository, from nothing              vitrify brief onboard
+  a new project, or a feature, from a PRD       vitrify brief authoring
+  change TDDs or SDDs, one or many              vitrify brief change
+  build an Active SDD                           vitrify brief run
+  where a build stands                          vitrify locate --units · vitrify run status
+  is the repository consistent                  vitrify check --all
+  the document formats                          vitrify schema show · vitrify schema show --tdd
+  every procedure                               vitrify brief";
+
+/// `vitrify --help`, after the options.
+pub const AFTER_LONG: &str = concat!(
+    "\
+Commands by task:
+
+ Set up this machine (once, in your own terminal; not a repository's step)
+  init              ~/.vitrify/config.toml with every default, then a first probe
+  probe             probe git and the harness CLIs again; update config.toml, asking first
+
+ Procedures and formats
+  brief             print the procedure index, or one procedure
+  schema show       print the SDD schema, or the TDD schema with --tdd
+  new               materialize a TDD or SDD template into the current directory
+
+ Author and check
+  lint              authoring checks L1–L11, each finding with its remediation
+  check             every read-only check over one SDD or all: is it consistent
+  readset           a unit's ordered minimal reading set, with its byte budget
+  pin list          the external contracts (pins, transcriptions) and their states
+  questions         the open questions (Q-###) and the units they block
+
+ Build and watch
+  run               the orchestrator: build every unit through the gate
+  run status        what a run is doing, unit by unit; its report once it ends
+  locate            find SDDs; list units and whether each can be claimed
+  ledger progress   the one-line progress summary
+
+ Change
+  change apply      a change entry's bookkeeping: events, Stale marks, ledger
+  audit             the seven drift checks; --fix-leases, --apply-stale fix
+  pin sync          rewrite stale pins from their authorities
+
+ Protocol verbs, for workers, the integrator and authored baselines
+ (not run by hand while `vitrify run` builds the SDD)
+  claim             take a unit's lease (publishes a mainline commit)
+  renew             extend a held lease (publishes a mainline commit)
+  release           give a lease back (publishes a mainline commit)
+  trace record      write a unit's trace map and stamp it Built or Verified
+  trace verify      compare a unit's recorded trace with the current content
+  journal append    append one event to the journal
+  journal replay    replay the journal and compare it with front matter
+  ledger regen      rewrite the derived ledger, or --check it
+
+Conventions:
+  - Never interactive, but for probe, which asks before it changes
+    ~/.vitrify/config.toml (-y answers yes); no color, pager or animation,
+    whatever the streams are.
+  - init sets the machine up once; every other command exits 4 until it
+    has, naming vitrify init, and reads ~/.vitrify/config.toml and the
+    repository's .vitrify/config.toml first: an error in either stops any
+    command alike.
+  - stdout is data; stderr is diagnostics, including `next:` lines that name
+    the command to run next.
+  - Read verbs take --json.
+  - With several SDDs in the repository, pass --sdd <root>, or --all where the
+    verb takes it.
+  - claim, renew, release and run publish mainline commits. trace record,
+    journal append, ledger regen, audit's fixing flags, pin sync and
+    change apply edit the working tree only; commit the result yourself.
+  - Briefs, schemas and templates are this binary's version.
+
+Exit status:
+  0  the asserted state holds (recorded, clean, listed, published)
+  1  unexpected error (git failure, I/O)
+  2  usage error, or a named check failed (lint, audit or check findings,
+     an init or probe FAIL, probe changes not applied, run preflight failure
+     or Blocked, a refused change apply)
+  3  trace or projection mismatch (trace verify, journal replay,
+     ledger regen --check, and check when one of those is the worst)
+  4  not found or precondition failed (no SDD, several SDDs and no --sdd, an
+     SDD of a schema version this vitrify does not read, no run recorded,
+     no journal, a machine init has not set up)
+  5  lost the publish race after retries
+  6  lease already expired (renew refused — claim again)
+
+vitrify ",
+    env!("CARGO_PKG_VERSION"),
+    " · https://github.com/bitshock-src/vitrify
+The repository's docs/ holds the guides and the reasons behind the design, for humans."
+);

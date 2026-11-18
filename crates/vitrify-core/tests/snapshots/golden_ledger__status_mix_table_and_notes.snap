@@ -1,0 +1,18 @@
+---
+source: crates/vitrify-core/tests/golden_ledger.rs
+expression: body
+---
+# Ledger — mix @ SDD 2.0.0 (derived 2026-10-30)
+
+Progress: 1/7 Verified · 1 Built · 2 Claimed · 1 Ready · 1 Stale · 1 Draft · 1 Retired
+
+| Unit  | Status   | Group | Built @ | Verified @ | Note                          |
+| ----- | -------- | ----- | ------- | ---------- | ----------------------------- |
+| U-001 | Verified | —     | 1.2.0   | 1.2.0      |                               |
+| U-002 | Built    | a     | 1.2.0   | —          | awaiting gate                 |
+| U-003 | Claimed  | —     | —       | —          | lease to 2026-01-03T00:00:00Z |
+| U-004 | Claimed  | —     | —       | —          | lease                         |
+| U-005 | Ready    | —     | —       | —          |                               |
+| U-006 | Stale    | —     | —       | —          |                               |
+| U-007 | Draft    | —     | —       | —          |                               |
+| U-008 | Retired  | —     | —       | —          |                               |

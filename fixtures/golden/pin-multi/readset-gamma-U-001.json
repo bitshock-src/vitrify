@@ -1,0 +1,30 @@
+{
+  "unit": "U-001",
+  "sdd": "{ROOT}/specs/gamma.sdd.md",
+  "shape": "single",
+  "consumes": [
+    "C-001"
+  ],
+  "readings": [
+    {
+      "path": "{ROOT}/specs/gamma.sdd.md",
+      "region": "Ground Rules"
+    },
+    {
+      "path": "{ROOT}/specs/gamma.sdd.md",
+      "region": "Technology Decisions"
+    },
+    {
+      "path": "{ROOT}/specs/gamma.sdd.md",
+      "region": "Work Units / U-001"
+    },
+    {
+      "path": "{ROOT}/specs/gamma.sdd.md",
+      "region": "Interface Contracts / C-001"
+    },
+    {
+      "path": "{ROOT}/specs/alpha/contracts/C-001-greeting.md",
+      "region": "Surface onward"
+    }
+  ]
+}

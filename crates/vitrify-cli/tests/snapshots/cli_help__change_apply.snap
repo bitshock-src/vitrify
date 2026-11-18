@@ -1,0 +1,51 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Apply the last change entry of each Active SDD: the `change` event, then Stale marks (MINOR, MAJOR) or re-recorded traces (PATCH), then the ledger (working tree only)
+
+Usage: vitrify change apply [OPTIONS]
+
+Options:
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --all
+          Every SDD of the repository
+
+      --dry-run
+          Print what would be done; write nothing
+
+      --commit <SHA>
+          Code commit to record on the events
+
+      --json
+          Print JSON on stdout instead of text
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+For each Active SDD whose last change entry has no change event yet: PATCH re-records the
+moved units' traces (status and stamps kept) and appends change --entry CH-###; MINOR or
+MAJOR appends change --entry CH-### --stale <units> and marks each Stale; then the ledger is
+regenerated. Re-running is safe: a recorded entry is skipped.
+Reads:   the changelog's last entry, front matter version and updated, the journal, unit
+         traces (audit check 5), the pin states
+Writes:  the working tree: unit front matter, journal events, the ledger (the commit is
+         yours); nothing with --dry-run
+Prints:  per SDD, label-prefixed: `calc: CH-004 1.2.0 → 1.3.0 (minor): U-002 marked Stale`
+         and `calc: - Staleness applied: U-002 → Stale`, or why nothing applies (already
+         recorded, Draft, no change entry). stderr: `next: copy the Staleness applied line
+         into CH-### (<changelog>), then run vitrify check`; with --dry-run
+         `dry run: nothing written`
+         --json: {sdd, root, entry, from, to, bump, action, restamped, stale,
+           staleness_line, dry_run}; an array with --all. bump: patch, minor, major or
+           null; action: applied, already-recorded, draft or no-entry
+Exit status: 0 applied, or nothing to do · 2 refused (version or updated does not match the
+         entry, a stale pin, a single file's entry outside ## Changelog), or a usage error
+         · 4 no SDD, or several and no --sdd · 1 error
+Examples:
+  vitrify change apply --sdd specs/calc --dry-run
+  vitrify change apply --all
+  vitrify change apply --sdd specs/calc --commit 3f2a9c1 --json
+Procedure: vitrify brief change

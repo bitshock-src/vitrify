@@ -1,0 +1,41 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Compute and write the trace map into unit front matter, and stamp the unit Built or Verified
+
+Usage: vitrify trace record [OPTIONS] --unit <UNIT> --stamp <STAMP>
+
+Options:
+      --unit <UNIT>
+          Unit ID, e.g. U-012
+
+      --stamp <STAMP>
+          The status to set, with its stamp
+
+          Possible values:
+          - built:    Status Built; writes the `built` stamp (the worker's last step)
+          - verified: Status Verified; writes the `verified` stamp (the integrator, after the gate)
+
+      --commit <SHA>
+          Short SHA for the stamp (default: HEAD)
+
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+A protocol verb for workers, the integrator and authored baselines; not run by hand while
+`vitrify run` builds the SDD. A change entry's re-stamps are vitrify change apply's.
+Reads:   the unit's entry, its consumed contracts, Ground Rules and Technology Decisions;
+         git HEAD for the default commit
+Writes:  the working tree: the unit's trace map; built sets status Built and
+         built: <date> @ SDD <version>, commit <sha>; verified sets status Verified and
+         verified:, and clears claimed_by and claim_expires. No journal event, no ledger.
+Prints:  one JSON object: {unit, recorded, stamp, file}
+Exit status: 0 recorded · 2 usage error · 4 no SDD, the unit or a consumed contract missing
+Examples:
+  vitrify trace record --unit U-003 --stamp built --sdd specs/calc
+  vitrify trace record --unit U-003 --stamp verified --commit 3f2a9c1
+Procedure: vitrify brief build-unit · vitrify brief integrate

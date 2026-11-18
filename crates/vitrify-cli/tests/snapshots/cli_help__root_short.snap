@@ -1,0 +1,30 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: cmd.clone().render_help().to_string()
+---
+vitrify — specs your coding agent builds through mechanical gates (spec-driven development)
+
+Start here — agents: run the procedure before changing anything under specs/
+  a new project, or a feature, from a PRD       vitrify brief authoring
+  change TDDs or SDDs, one or many              vitrify brief change
+  build an Active SDD                           vitrify brief run
+  where a build stands                          vitrify locate --units · vitrify run status
+  is the repository consistent                  vitrify check --all
+
+Usage: vitrify <COMMAND>
+
+Options:
+  -h, --help     Print help (see more with '--help')
+  -V, --version  Print version
+
+Commands, by task:
+  set up this machine      init · probe
+  procedures and formats   brief · schema show · new
+  author and check         lint · check · readset · pin list · questions
+  build and watch          run · run status · locate · ledger progress
+  change                   change apply · audit · pin sync
+  protocol verbs           claim · renew · release · trace record · trace verify ·
+                           journal append · journal replay · ledger regen
+
+Run 'vitrify --help' for commands by task, conventions and exit codes;
+'vitrify <command> --help' for what a command reads, writes and prints.

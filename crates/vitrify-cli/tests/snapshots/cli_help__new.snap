@@ -1,0 +1,44 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Materialize instance templates into the current directory
+
+Usage: vitrify new [OPTIONS] <KIND> [NAME]
+
+Arguments:
+  <KIND>
+          The document to materialize
+
+          Possible values:
+          - tdd: A TDD: <name>.md (default tdd.md) from the TDD template
+          - sdd: An SDD: a bundle directory <name>/ (default scope/), or <name>.sdd.md with --single
+
+  [NAME]
+          Instance name (slug)
+
+Options:
+      --bundle
+          Bundle shape (SDD only; default)
+
+      --single
+          Single-file shape (SDD only)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   ~/.vitrify/templates/ ($VITRIFY_HOME; an override on disk wins)
+Writes:  the working tree, in the current directory: tdd → NAME.md (default tdd.md);
+         sdd → NAME/ bundle with sdd.md, units/, contracts/, changelog.md, decisions.md;
+         sdd --single → NAME.sdd.md (default NAME scope). An SDD declares
+         schema_version: 2.0. Never overwrites.
+Prints:  the created path; stderr: `next: fill <path> per vitrify schema show, then run
+         vitrify lint --sdd <path>` (sdd), `next: fill <path> per vitrify schema show --tdd`
+         (tdd)
+Exit status: 0 created · 2 the target exists, or a usage error
+Config:  VITRIFY_HOME
+Examples:
+  vitrify new tdd calc-tdd
+  vitrify new sdd calc
+  vitrify new sdd --single calc
+Procedure: vitrify brief authoring

@@ -1,0 +1,4 @@
+{"seq":1,"at":"2026-10-29T00:41:10Z","event":"change","actor":"author","entry":"CH-001","sdd":"1.0.0","commit":"0000000"}
+{"seq":2,"at":"2026-10-29T00:41:10Z","event":"claim","unit":"U-001","actor":"author","claim_seq":1,"sdd":"1.0.0","commit":"0000000"}
+{"seq":3,"at":"2026-10-29T00:41:10Z","event":"built","unit":"U-001","actor":"author","claim_seq":1,"sdd":"1.0.0","commit":"0000000"}
+{"seq":4,"at":"2026-10-29T00:41:11Z","event":"verified","unit":"U-001","actor":"author","claim_seq":1,"sdd":"1.0.0","commit":"0000000"}

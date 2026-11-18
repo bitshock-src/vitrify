@@ -1,0 +1,36 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Mechanical authoring checks (L1–L11)
+
+Usage: vitrify lint [OPTIONS]
+
+Options:
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --all
+          Lint every SDD of the repository
+
+      --built
+          The SDD is being built, or has been: leave out L7 (state that must not exist before the build) — what `run` preflights with
+
+      --json
+          Print JSON on stdout instead of text
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   the SDD; the other SDDs it pins (L9); its changelog (L10); its TDD (L11)
+Writes:  nothing
+Prints:  `lint clean (L1–L11)`, or one `[L#] subject: cause → remediation` line per finding;
+         --all prefixes each line with the slug
+         --json: {clean, findings: [{check, subject, cause, remediation}]};
+         --all: an array of {sdd, root, clean, findings}
+Exit status: 0 clean · 2 a finding, or a usage error · 4 no SDD, or several and no --sdd
+Config:  lint.readset_budget_bytes (VITRIFY_LINT_READSET_BUDGET_BYTES), for L5
+Examples:
+  vitrify lint --sdd specs/calc
+  vitrify lint --all --built --json
+Procedure: vitrify brief authoring (before Active) · vitrify brief change (after)

@@ -1,0 +1,81 @@
+{
+  "sdd": "{ROOT}/specs/calc",
+  "shape": "bundle",
+  "version": "1.0.0",
+  "status": "Active",
+  "units": [
+    {
+      "unit": "U-001",
+      "status": "Verified",
+      "parallel_group": null,
+      "depends_on": {},
+      "claimed_by": null,
+      "claim_expires": null,
+      "claim_seq": 1,
+      "lease_live": false,
+      "claimable": false,
+      "file": "{ROOT}/specs/calc/units/U-001-foundation.md"
+    },
+    {
+      "unit": "U-002",
+      "status": "Ready",
+      "parallel_group": null,
+      "depends_on": {
+        "U-001": "Verified"
+      },
+      "claimed_by": null,
+      "claim_expires": null,
+      "claim_seq": 0,
+      "lease_live": false,
+      "claimable": true,
+      "file": "{ROOT}/specs/calc/units/U-002-errors.md"
+    },
+    {
+      "unit": "U-003",
+      "status": "Ready",
+      "parallel_group": "A",
+      "depends_on": {
+        "U-001": "Verified",
+        "U-002": "Ready"
+      },
+      "claimed_by": null,
+      "claim_expires": null,
+      "claim_seq": 0,
+      "lease_live": false,
+      "claimable": false,
+      "file": "{ROOT}/specs/calc/units/U-003-tokenizer.md"
+    },
+    {
+      "unit": "U-004",
+      "status": "Ready",
+      "parallel_group": "A",
+      "depends_on": {
+        "U-001": "Verified",
+        "U-002": "Ready"
+      },
+      "claimed_by": null,
+      "claim_expires": null,
+      "claim_seq": 0,
+      "lease_live": false,
+      "claimable": false,
+      "file": "{ROOT}/specs/calc/units/U-004-evaluator.md"
+    },
+    {
+      "unit": "U-005",
+      "status": "Ready",
+      "parallel_group": null,
+      "depends_on": {
+        "U-001": "Verified",
+        "U-002": "Ready",
+        "U-003": "Ready",
+        "U-004": "Ready"
+      },
+      "claimed_by": null,
+      "claim_expires": null,
+      "claim_seq": 0,
+      "lease_live": false,
+      "claimable": false,
+      "file": "{ROOT}/specs/calc/units/U-005-cli.md"
+    }
+  ]
+}

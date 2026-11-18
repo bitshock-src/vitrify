@@ -1,0 +1,17 @@
+[package]
+name = "stub-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Deterministic stand-in worker for vitrify orchestrator tests (builds units from the example's reference implementation)"
+
+[[bin]]
+name = "stub-worker"
+path = "src/main.rs"
+
+[dependencies]
+toml = { workspace = true }
+serde_json = { workspace = true }

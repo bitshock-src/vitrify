@@ -1,0 +1,36 @@
+[package]
+name = "vitrify-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "vitrify: Rust CLI suite, orchestrator, and harness integration for spec-driven development (SDD)"
+documentation = "https://github.com/bitshock-src/vitrify/blob/main/docs/README.md"
+readme = "README.md"
+keywords = ["sdd", "spec-driven", "ai-agents", "orchestration", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+# the published crate: its sources only; the tests read fixtures at the
+# repository root, so they run from a checkout only
+include = ["src/**/*.rs", "README.md", "LICENSE"]
+
+[[bin]]
+name = "vitrify"
+path = "src/main.rs"
+
+[dependencies]
+vitrify-core = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+fs-err = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+insta = { workspace = true }
+tempfile = { workspace = true }

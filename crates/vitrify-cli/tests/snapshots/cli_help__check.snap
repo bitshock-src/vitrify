@@ -1,0 +1,46 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Every consistency check vitrify has, over one SDD or all of them
+
+Usage: vitrify check [OPTIONS]
+
+Options:
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --all
+          Check every SDD of the repository
+
+      --skip-rotten
+          Skip re-running Verified units' Verification tables (audit check 4)
+
+      --json
+          Print JSON on stdout instead of text
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Runs every read-only check over one SDD, or with --all the repository: lint (--built once
+any unit has build state or a journal exists), audit (check 4 unless --skip-rotten), journal
+replay (where a journal exists), ledger regen --check (where a ledger or journal exists) and
+the pin states. Runs no §5 command; vitrify run --dry-run does.
+Reads:   each SDD, its journal and ledger, the SDDs it pins, its changelog and TDD
+Writes:  nothing
+Prints:  one `<slug>: [<source> <check>] subject: cause → remediation` line per finding,
+         then `<slug>: note: Q-### is open (blocks …)` notes, then
+         `check clean: N SDDs`, or `check: N findings in M of K SDDs`
+         --json: {sdd, root, clean, findings: [{source, check, subject, cause, remediation}],
+           notes}; an array with --all. source: lint, audit, journal, ledger or pin;
+           check: "L4", "5" or null
+Exit status: the worst component (an error, 1, wins; else the highest): 0 clean · 2 a lint,
+         audit or pin finding, or a usage error · 3 a journal or ledger mismatch · 4 no SDD,
+         several and no --sdd, a schema version this vitrify does not read
+Config:  lint.readset_budget_bytes (VITRIFY_LINT_READSET_BUDGET_BYTES) · run.gate_jobs
+         (VITRIFY_RUN_GATE_JOBS), for audit check 4
+Examples:
+  vitrify check --sdd specs/calc
+  vitrify check --all --skip-rotten
+  vitrify check --all --json
+Procedure: vitrify brief change

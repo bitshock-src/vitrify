@@ -1,0 +1,31 @@
+{
+  "unit": "U-003",
+  "sdd": "{ROOT}/specs/calc",
+  "shape": "bundle",
+  "consumes": [
+    "C-001",
+    "C-002"
+  ],
+  "readings": [
+    {
+      "path": "{ROOT}/specs/calc/sdd.md",
+      "region": "Ground Rules"
+    },
+    {
+      "path": "{ROOT}/specs/calc/sdd.md",
+      "region": "Technology Decisions"
+    },
+    {
+      "path": "{ROOT}/specs/calc/units/U-003-tokenizer.md",
+      "region": null
+    },
+    {
+      "path": "{ROOT}/specs/calc/contracts/C-001-errors.md",
+      "region": null
+    },
+    {
+      "path": "{ROOT}/specs/calc/contracts/C-002-token-stream.md",
+      "region": null
+    }
+  ]
+}

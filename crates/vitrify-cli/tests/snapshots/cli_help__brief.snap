@@ -1,0 +1,49 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Print the procedure index, or the operative procedure for a task
+
+Usage: vitrify brief [OPTIONS] [TASK]
+
+Arguments:
+  [TASK]
+          The procedure to print (none: the index)
+
+          Possible values:
+          - onboard:    Take a repository from nothing to ready-to-build, or name the gaps
+          - authoring:  A PRD to an Approved TDD and an Active, lint-clean SDD
+          - change:     Change TDDs and SDDs, one or many, and record what each change stales
+          - run:        Start, watch and read a `vitrify run` build
+          - kickoff:    Drive the build loop from a session instead of `vitrify run`
+          - build-unit: Build one unit (--unit --holder prints a worker's whole prompt)
+          - integrate:  Take one built unit through the gate to Verified
+
+Options:
+      --unit <UNIT>
+          Unit ID (build-unit worker-prompt generation)
+
+      --holder <HOLDER>
+          Holder identity (build-unit worker-prompt generation)
+
+      --sdd <ROOT>
+          SDD root for the worker prompt: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   ~/.vitrify/briefs/<task>.md ($VITRIFY_HOME; an override on disk wins); build-unit
+         with --unit --holder also reads the SDD, the unit's reading set and its claim
+Writes:  nothing in the repository; restores or refreshes its copy under ~/.vitrify/
+Prints:  no task: the procedure index (task, what it is for, who follows it)
+         a task: that procedure, filled with this vitrify's version and values
+         build-unit --unit --holder: the whole worker prompt vitrify run hands a worker
+Exit status: 0 printed · 2 --unit and --holder not given together, or not to build-unit,
+         or a usage error · 4 unknown unit, no SDD, or several and no --sdd
+Config:  run.status_check_seconds (VITRIFY_RUN_STATUS_CHECK_SECONDS), in brief run;
+         run.worktree_dir (VITRIFY_RUN_WORKTREE_DIR); run.lease_minutes
+         (VITRIFY_RUN_LEASE_MINUTES), in the worker prompt; VITRIFY_HOME
+Examples:
+  vitrify brief
+  vitrify brief change
+  vitrify brief build-unit --unit U-003 --holder w1 --sdd specs/calc

@@ -1,0 +1,34 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Replay from empty and compare the projection with front matter
+
+Usage: vitrify journal replay [OPTIONS]
+
+Options:
+      --json
+          Print JSON on stdout instead of text
+
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
+
+      --all
+          Every SDD of the repository
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   the journal (journal.ndjson, or the ## Journal block) and unit front matter
+Writes:  nothing
+Prints:  `journal consistent (N events)`, or one `order: …` or
+         `mismatch U.field: journal projects …, front matter says …` line per problem;
+         --all prefixes each line with the slug, `calc: no journal yet` where none
+         --json: {events, consistent, order_findings, mismatches, projection};
+         --all: an array of the same, each led by sdd and root
+Exit status: 0 consistent · 3 an order finding or mismatch · 4 no SDD, several and no --sdd,
+         or no journal (an SDD with no journal does not fail --all) · 2 usage error
+Examples:
+  vitrify journal replay --sdd specs/calc
+  vitrify journal replay --all --json
+Procedure: vitrify brief kickoff

@@ -1,0 +1,35 @@
+---
+source: crates/vitrify-cli/tests/cli_help.rs
+expression: "long_help(&cmd, &path)"
+---
+Find SDD instances; list units and claimability
+
+Usage: vitrify locate [OPTIONS]
+
+Options:
+      --units
+          List units of one SDD with the computed claimable flag
+
+      --sdd <ROOT>
+          SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: every SDD; with --units, the one SDD in the repository)
+
+      --json
+          Print JSON on stdout instead of text
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Reads:   SDD discovery (specs/*/sdd.md, specs/*.sdd.md, then the files git would commit);
+         with --units, the SDD's units and their front matter
+Writes:  nothing
+Prints:  one line per SDD: root, shape, slug, version, status, unit count
+         --json: [{root, shape, sdd, title, version, status, scope_roots, units}]
+         --units: one line per unit: status, parallel group, claim_seq, claimable
+         --units --json: {sdd, shape, version, status, units: [{unit, status, parallel_group,
+           depends_on, claimed_by, claim_expires, claim_seq, lease_live, claimable, file}]}
+Exit status: 0 listed · 4 no SDD; with --units, several and no --sdd · 2 usage error
+         An SDD of a schema version this vitrify does not read is still listed.
+Examples:
+  vitrify locate
+  vitrify locate --units --sdd specs/calc
+  vitrify locate --units --json
