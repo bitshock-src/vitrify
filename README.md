@@ -63,7 +63,7 @@ Workers are headless sessions of Claude Code, Codex, or OpenCode on the account 
 vitrify is published on crates.io as [`vitrify-cli`](https://crates.io/crates/vitrify-cli). Install it with cargo, from Rust 1.89 or later:
 
 ```sh
-cargo install vitrify-cli --version 0.5.0 --locked    # installs the `vitrify` binary
+cargo install vitrify-cli --version 0.6.0 --locked    # installs the `vitrify` binary
 ```
 
 Runtime dependency set: exactly `{git}` (≥ 2.30). Harness headless CLIs are optional and only needed by `vitrify run`. Supported platforms: macOS and Linux (Windows via WSL 2). To build from source, prepare a harness, or upgrade, see [Installation](docs/getting-started/installation.md).

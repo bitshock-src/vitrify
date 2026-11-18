@@ -54,12 +54,12 @@ You need these tools:
 Install the version these docs describe from crates.io, where vitrify is published as `vitrify-cli`, and check it:
 
 ```sh
-cargo install vitrify-cli --version 0.5.0 --locked
+cargo install vitrify-cli --version 0.6.0 --locked
 vitrify --version
 ```
 
 ```text
-vitrify 0.5.0
+vitrify 0.6.0
 ```
 
 To build from source instead, see [Install From Source](installation.md#install-from-source).
