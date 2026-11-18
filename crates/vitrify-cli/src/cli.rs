@@ -169,7 +169,7 @@ pub enum Cmd {
         #[arg(long, value_name = "ROOT")]
         sdd: Option<String>,
         /// Mainline branch the run publishes to (default: config mainline,
-        /// else origin/HEAD, else the primary checkout's branch)
+        /// else the primary checkout's branch, else origin/HEAD)
         #[arg(long, value_name = "BRANCH")]
         mainline: Option<String>,
         #[command(subcommand)]
@@ -312,7 +312,7 @@ pub struct ClaimArgs {
     #[arg(long, value_name = "ROOT")]
     pub sdd: Option<String>,
     /// Mainline branch the lease commit is published to (default: config
-    /// mainline, else origin/HEAD, else the primary checkout's branch)
+    /// mainline, else the primary checkout's branch, else origin/HEAD)
     #[arg(long, value_name = "BRANCH")]
     pub mainline: Option<String>,
 }

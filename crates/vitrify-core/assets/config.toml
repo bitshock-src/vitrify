@@ -13,8 +13,8 @@
 
 schema = 1                     # the file format version; must be 1
 
-mainline = ""                  # mainline branch; "" = origin/HEAD, the primary
-                               #   checkout's branch, then main or master
+mainline = ""                  # mainline branch; "" = the primary checkout's
+                               #   branch, else origin/HEAD, then main or master
 
 [run]
 worker_cap = 4                 # max concurrent workers

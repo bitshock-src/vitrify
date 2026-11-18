@@ -634,8 +634,13 @@ impl Git {
 }
 
 /// Mainline resolution, in order of precedence:
-/// `--mainline` flag > repo config `mainline` > `origin/HEAD` > the primary
-/// checkout's current branch > `main`/`master` > error.
+/// `--mainline` flag > config `mainline` > the primary checkout's current
+/// branch > `origin/HEAD` > `main`/`master` > error.
+///
+/// The checked-out branch outranks `origin/HEAD`, so a run started — or
+/// resumed — from a checkout on a build branch publishes to that branch,
+/// and the checkout follows what it publishes. `origin/HEAD` is consulted
+/// only when the primary checkout is detached.
 pub fn resolve_mainline(
     primary: &Git,
     flag: Option<&str>,
@@ -649,10 +654,10 @@ pub fn resolve_mainline(
     if !config_mainline.is_empty() {
         return Ok(config_mainline.to_string());
     }
-    if let Some(b) = primary.origin_head_branch()? {
+    if let Some(b) = primary.current_branch()? {
         return Ok(b);
     }
-    if let Some(b) = primary.current_branch()? {
+    if let Some(b) = primary.origin_head_branch()? {
         return Ok(b);
     }
     for cand in ["main", "master"] {

@@ -115,7 +115,7 @@ pub const ASSETS: &[Asset] = &[
 pub const CONFIG: Asset = Asset {
     rel_path: "config.toml",
     body: include_str!("../assets/config.toml"),
-    sha256: "f7c12e668d91f5d4894b123cea6e89748ba2020c671a4ea2549d592630c6f44c",
+    sha256: "380c6ceb201764376afbae47d4ab2b83051e024217341454b12255c62295e8b2",
 };
 
 /// Enumerate the complete embedded set.

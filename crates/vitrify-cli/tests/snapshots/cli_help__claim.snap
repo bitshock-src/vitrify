@@ -22,7 +22,7 @@ Options:
           SDD root, as a path from where the verb runs (the primary checkout or any worktree of it); default: the one SDD in the repository
 
       --mainline <BRANCH>
-          Mainline branch the lease commit is published to (default: config mainline, else origin/HEAD, else the primary checkout's branch)
+          Mainline branch the lease commit is published to (default: config mainline, else the primary checkout's branch, else origin/HEAD)
 
   -h, --help
           Print help (see a summary with '-h')
