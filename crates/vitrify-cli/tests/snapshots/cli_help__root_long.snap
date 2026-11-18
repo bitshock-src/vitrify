@@ -101,5 +101,5 @@ Exit status:
   5  lost the publish race after retries
   6  lease already expired (renew refused — claim again)
 
-vitrify 0.5.0 · https://github.com/bitshock-src/vitrify
+vitrify 0.6.0 · https://github.com/bitshock-src/vitrify
 The repository's docs/ holds the guides and the reasons behind the design, for humans.

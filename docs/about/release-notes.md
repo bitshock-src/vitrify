@@ -4,6 +4,14 @@
 
 Use this page to see what a release changed. Each entry gives the version, its date, one sentence and the changes; the repository's git history is the complete record. vitrify is at 0.y.z, so any release may change any command, output or format — [Versioning](../reference/formats.md#10-versioning) gives the rule.
 
+## Release 0.6.0
+
+2026-11-18
+
+0.6.0 makes the checked-out branch the default mainline, so a run started or resumed on a build branch publishes to that branch.
+
+- With no `--mainline` and no `mainline` setting, `vitrify run`, `claim`, `renew` and `release` resolve mainline to the primary checkout's current branch. `origin/HEAD`, which 0.5.0 tried first, is used only when the checkout is detached.
+
 ## Release 0.5.0
 
 2026-11-17
