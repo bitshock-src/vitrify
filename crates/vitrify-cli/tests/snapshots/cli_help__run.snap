@@ -28,7 +28,7 @@ Options:
           SDD root to build: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
 
       --mainline <BRANCH>
-          Mainline branch the run publishes to (default: config mainline, else origin/HEAD, else the primary checkout's branch)
+          Mainline branch the run publishes to (default: config mainline, else the primary checkout's branch, else origin/HEAD)
 
   -h, --help
           Print help (see a summary with '-h')

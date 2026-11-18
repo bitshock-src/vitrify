@@ -568,7 +568,7 @@ vitrify release --unit U --holder ID [--sdd <root>] [--mainline BRANCH]
 
 Each is one atomic mainline transaction (design: [Claim Transactions](../about/architecture.md#claim-transactions)):
 
-1. **Resolve mainline:** `--mainline` > config `mainline` (`VITRIFY_MAINLINE`) > `origin/HEAD` > the primary checkout's current branch > `main` or `master`. Publishing uses `git push` when `origin` exists and `git fetch origin <mainline>` succeeds; otherwise it moves the local branch with a compare-and-swap `git update-ref`.
+1. **Resolve mainline:** `--mainline` > config `mainline` (`VITRIFY_MAINLINE`) > the primary checkout's current branch > `origin/HEAD` > `main` or `master`. Publishing uses `git push` when `origin` exists and `git fetch origin <mainline>` succeeds; otherwise it moves the local branch with a compare-and-swap `git update-ref`.
 2. **Build at the head:** check out the mainline head into a throwaway `.vitrify/tx-<pid>-<n>` worktree and re-check preconditions there. The SDD must already be committed to mainline. `--sdd` is a path from where the verb runs — the primary checkout or any worktree of it — and reaches the same SDD from each; a path in no checkout of the repository is refused (exit 4), never edited where it lies.
 3. **Commit:** edit the unit's front matter, append the journal event, regenerate the ledger, and commit as `sdd: <op> <unit> (c<seq>) by <holder>`.
 4. **Publish:** never forced. A lost race resyncs and retries — 3 attempts in all.

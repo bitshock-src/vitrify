@@ -11,8 +11,8 @@ Configuration is TOML at `~/.vitrify/config.toml`. A repository may add its own 
 ```toml
 schema = 1                     # the file format version; must be 1
 
-mainline = ""                  # mainline branch; "" = origin/HEAD, the primary
-                               #   checkout's branch, then main or master
+mainline = ""                  # mainline branch; "" = the primary checkout's
+                               #   branch, else origin/HEAD, then main or master
 
 [run]
 worker_cap = 4                 # max concurrent workers
@@ -46,7 +46,7 @@ Use this table to look up each setting, its default, and its override.
 | Field | Default | Notes |
 | --- | --- | --- |
 | `schema` | `1` | The file format version, in `~/.vitrify/config.toml` and in a repository's `.vitrify/config.toml` alike. This vitrify reads version 1 and refuses any other value. |
-| `mainline` | `""` | The mainline branch. Empty resolves it in order: `origin/HEAD`, the primary checkout's current branch, then `main` or `master`. Overridden by `--mainline` and `VITRIFY_MAINLINE`. |
+| `mainline` | `""` | The mainline branch. Empty resolves it in order: the primary checkout's current branch, then `origin/HEAD` (when the checkout is detached), then `main` or `master` — so a run started or resumed from a checkout on a build branch publishes to that branch. Overridden by `--mainline` and `VITRIFY_MAINLINE`. |
 | `run.worker_cap` | `4` | Maximum concurrent workers. Overridden by `--cap`. A single-file SDD always runs one. |
 | `run.lease_minutes` | `60` | The claim lease that `vitrify run` and generated worker prompts use. `vitrify claim` and `renew` do not read it; they take `--lease-minutes` (default 60). |
 | `run.renew_fraction` | `0.25` | Renew a worker's lease when less than this fraction of it remains. |

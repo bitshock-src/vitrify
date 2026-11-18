@@ -114,10 +114,11 @@ fn mainline_precedence_table() {
     );
     // repo config wins next
     assert_eq!(resolve_mainline(&git, None, "cfgline").unwrap(), "cfgline");
-    // current branch (no origin/HEAD here)
+    // then the current branch
     assert_eq!(resolve_mainline(&git, None, "").unwrap(), "main");
 
-    // origin/HEAD wins over the current branch
+    // the current branch wins over origin/HEAD: a run started — or resumed —
+    // from a checkout on a build branch publishes to that branch
     let origin = tmp.path().join("origin.git");
     std::fs::create_dir(&origin).unwrap();
     sh_git(&origin, &["init", "-q", "--bare", "-b", "trunk"]);
@@ -134,6 +135,13 @@ fn mainline_precedence_table() {
             "refs/remotes/origin/trunk",
         ],
     );
+    assert_eq!(resolve_mainline(&git, None, "").unwrap(), "main");
+    sh_git(tmp.path(), &["checkout", "-q", "-b", "build/x"]);
+    assert_eq!(resolve_mainline(&git, None, "").unwrap(), "build/x");
+
+    // detached HEAD → origin/HEAD
+    let head = sh_git(tmp.path(), &["rev-parse", "HEAD"]);
+    sh_git(tmp.path(), &["checkout", "-q", "--detach", &head]);
     assert_eq!(resolve_mainline(&git, None, "").unwrap(), "trunk");
 
     // detached HEAD, no origin/HEAD → main/master probe

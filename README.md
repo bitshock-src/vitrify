@@ -25,6 +25,7 @@ Deterministic means smart. `vitrify run` reads the whole spec — every dependen
 - **It knows the contracts.** Every worker gets exactly its unit's reading set — its own text, the contracts it consumes, and the rules every unit shares — so units built in parallel code against the same frozen interfaces. When a contract changes, the run rebuilds exactly the units that consume it, stopping any worker still building from the old text.
 - **It resolves conflicts before they land.** Units own disjoint files, so parallel workers never edit the same one. Every merge is gated on the combined tree; a red batch is gated again unit by unit, so the sound work lands and the unit at fault goes back with the reason.
 - **It recovers on its own.** A failed attempt keeps its files and is retried with what failed; after two failures a stronger model judges it, and a unit that still cannot land is set aside rather than retried forever.
+- **It resumes where it stopped.** Ctrl-C it, kill it, or lose power mid-build, then run `vitrify run` again — no resume flag, no recovery step. It releases any claims the last run left behind, keeps everything that landed, and restarts each unfinished unit from its last attempt's files.
 
 A model is invoked at exactly three points — to build a unit, to judge one that keeps failing, and to help you author — and never drives the loop. [Inside `vitrify run`](#inside-vitrify-run) has the details.
 

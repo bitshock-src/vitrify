@@ -16,6 +16,7 @@ Use this page to go from installing vitrify to a verified build of your own proj
 - **Code drives the loop; models build.** A model is invoked at exactly three points — a worker builds one unit, an escalation call judges a unit that keeps failing, and an authoring session helps you write the spec — each with a fixed input and an output the code acts on. Scheduling, claims, integration, and retries are code.
 - **Failures come back with their reasons.** A failed attempt is kept on its branch, and the next attempt starts from its files and is told what failed. After two failures, a stronger model returns a verdict — `retry`, `release`, `block`, or `abort` — that the run enforces, and a unit that still cannot land is set aside rather than retried forever.
 - **Nothing is lost.** Every change of state is a commit on your mainline. A run that is stopped, killed, or loses power resumes from the repository the next time `vitrify run` starts.
+- **It resumes where it stopped.** No resume flag and no recovery step: run `vitrify run` again and it releases any claims the last run left behind, keeps everything that landed, and restarts each unfinished unit from its last attempt's files. [Resume the Build](#resume-the-build) shows how.
 - **One report at the end.** The run ends `Complete.` — every unit Verified, the audit clean, the journal consistent, and your test command passing, all quoted — or `Blocked.`, with each unfinished unit's blocker named.
 
 The design follows the evidence: in the one controlled study on this axis, deterministic orchestration achieved accuracy comparable to model-driven orchestration while improving worst-case robustness and reducing variability across runs. [Runs](../about/concepts/runs.md) explains each stage of a run, and [Design Rationale](../about/design-rationale.md#design-positions) cites the sources.
@@ -166,6 +167,12 @@ Warnings are marked `!`: a worker that has gone quiet, or one near its budget. E
 
 > [!WARNING]
 > The run writes each worker's full prompt — including the spec text it read — and everything its session printed to `.vitrify/logs/<job>/`. Protect that directory as you would any agent transcript.
+
+### Resume the Build
+
+Every claim, merge, and Verified stamp a run makes is a commit on **mainline**, the one branch it builds from and publishes to, so the build's state lives in git, not in the process. To resume — after a crash, a Ctrl-C, or a `Blocked.` whose blockers you have fixed — run `vitrify run` again with the same branch checked out: it reads the state back from mainline and carries on where the last run stopped.
+
+Mainline is the branch your checkout is on, unless `--mainline` or the `mainline` setting names another; the `Mainline:` line of `vitrify run --dry-run` shows which branch a run will use. To build on a branch other than `main`, check it out before the first run and resume from it. When `origin` has that branch, each commit is pushed there, never forced; otherwise only your local branch moves. [Command Reference](../cli/command-reference.md#vitrify-claim-renew-release) explains mainline in detail: how it is resolved, how commits reach it, and how your checkout follows them.
 
 ### Run It From Your Agent
 

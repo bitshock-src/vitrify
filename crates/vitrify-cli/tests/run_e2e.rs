@@ -1985,6 +1985,64 @@ fn preflight_refuses_local_commits_origin_does_not_hold() {
 }
 
 #[test]
+fn a_run_from_a_build_branch_publishes_there_and_resumes_there() {
+    // origin/HEAD names main, as in any clone; a run started from a checkout
+    // on a build branch, with no --mainline, builds on that branch — and so
+    // does the run after it — while main is left as it was
+    let r = rig();
+    let origin = r._tmp.path().join("origin.git");
+    std::fs::create_dir(&origin).unwrap();
+    git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        &r.root,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&r.root, &["push", "-q", "origin", "main"]);
+    git(&r.root, &["remote", "set-head", "origin", "main"]);
+    let main_was = git(&r.root, &["rev-parse", "main"]);
+    git(&r.root, &["checkout", "-q", "-b", "build/mini"]);
+    git(&r.root, &["push", "-q", "-u", "origin", "build/mini"]);
+
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &[]);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stdout.contains("Mainline: build/mini   Remote: origin"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Progress: 2/2 Verified"), "{stdout}");
+
+    // the build is on the build branch, at origin and locally, and the
+    // checkout followed it; main moved nowhere
+    for unit in ["U-001-one", "U-002-two"] {
+        let text = git(
+            &origin,
+            &["show", &format!("build/mini:specs/mini/units/{unit}.md")],
+        );
+        assert!(text.contains("status: Verified"), "{unit}: {text}");
+    }
+    assert_eq!(
+        git(&r.root, &["rev-parse", "build/mini"]),
+        git(&origin, &["rev-parse", "build/mini"])
+    );
+    assert_eq!(
+        std::fs::read_to_string(r.root.join("src/one.txt")).unwrap(),
+        "one\n"
+    );
+    assert!(git(&r.root, &["status", "--porcelain"]).is_empty());
+    assert_eq!(git(&origin, &["rev-parse", "main"]), main_was);
+    assert_eq!(git(&r.root, &["rev-parse", "main"]), main_was);
+
+    // the next run resolves the same branch: nothing to build there, and
+    // main — whose units are all still Ready — is not started on
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &[]);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("Mainline: build/mini"), "{stdout}");
+    assert!(!stdout.contains("dispatch"), "{stdout}");
+    assert!(stdout.contains("Complete."), "{stdout}");
+    assert_eq!(git(&origin, &["rev-parse", "main"]), main_was);
+}
+
+#[test]
 fn a_run_that_publishes_through_origin_never_falls_back_to_the_local_branch() {
     // A run that began by pushing holds every later commit to that. When
     // origin stops answering, a claim or a release fails — it is not put on
