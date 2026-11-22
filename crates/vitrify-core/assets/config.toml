@@ -8,8 +8,8 @@
 #
 # Settings resolve in this order, first match wins: command-line flags,
 # VITRIFY_* environment variables, a repository's .vitrify/config.toml
-# (which may set mainline, [run], [harness] preferred and [lint] for that
-# repository), this file.
+# (which may set mainline, [run], [authoring], [harness] preferred and [lint]
+# for that repository), this file.
 
 schema = 1                     # the file format version; must be 1
 
@@ -17,7 +17,7 @@ mainline = ""                  # mainline branch; "" = the primary checkout's
                                #   branch, else origin/HEAD, then main or master
 
 [run]
-worker_cap = 4                 # max concurrent workers
+worker_cap = 20                # max concurrent workers
 lease_minutes = 60             # claim lease
 renew_fraction = 0.25          # renew when remaining < fraction × lease
 abort_failed_waves = 2         # failed attempts of one unit before the
@@ -34,6 +34,11 @@ worktree_dir = ""              # "" = ~/.vitrify/worktrees/<repo>-<hash>;
                                #   relative = from the repository root
 status_check_seconds = 270     # how often an agent operating a run checks
                                #   `vitrify run status` when it cannot be notified
+
+[authoring]
+approval = "human"             # who approves a TDD or its revision in
+                               #   `vitrify brief authoring|change`: "human", or
+                               #   "agent" once the SDD-readiness checklist passes
 
 [lint]
 readset_budget_bytes = 65536   # per-unit reading-set budget (bytes by design)

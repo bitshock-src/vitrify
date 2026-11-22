@@ -18,6 +18,7 @@ pub struct Config {
     /// Repo-level mainline branch override; empty = resolve by the mainline precedence.
     pub mainline: String,
     pub run: RunConfig,
+    pub authoring: AuthoringConfig,
     pub harness: HarnessConfig,
     pub lint: LintConfig,
 }
@@ -60,6 +61,42 @@ pub struct RunConfig {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct AuthoringConfig {
+    /// Who signs off on a TDD or its revision in the authoring and change
+    /// procedures (`vitrify brief authoring|change` print the matching
+    /// sentences). Lint never asks: it reads the TDD's Status either way.
+    pub approval: Approval,
+}
+
+/// `authoring.approval`: `"human"` — the default — or `"agent"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Approval {
+    /// The human approves; the agent stops and hands the TDD back.
+    Human,
+    /// Approval is delegated to the agent: it approves a TDD, or its
+    /// revision, once the SDD-readiness checklist passes line by line.
+    Agent,
+}
+
+impl Approval {
+    /// The canonical word, `None` for anything but the two modes.
+    pub fn parse(v: &str) -> Option<Approval> {
+        match v {
+            "human" => Some(Approval::Human),
+            "agent" => Some(Approval::Agent),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Approval::Human => "human",
+            Approval::Agent => "agent",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct HarnessConfig {
     /// "" = the first harness the probe recorded, of claude, codex,
     /// opencode. Per-role model and effort are the `[harness.<name>]`
@@ -77,7 +114,7 @@ impl Default for Config {
         Config {
             mainline: String::new(),
             run: RunConfig {
-                worker_cap: 4,
+                worker_cap: 20,
                 lease_minutes: 60,
                 renew_fraction: 0.25,
                 abort_failed_waves: 2,
@@ -88,6 +125,9 @@ impl Default for Config {
                 poll_seconds: 30,
                 worktree_dir: String::new(),
                 status_check_seconds: 270,
+            },
+            authoring: AuthoringConfig {
+                approval: Approval::Human,
             },
             harness: HarnessConfig {
                 preferred: String::new(),
@@ -232,6 +272,15 @@ fn apply_toml(cfg: &mut Config, value: &toml::Value, source: &str) -> Result<(),
                 .as_str()
                 .ok_or_else(|| bad("run.worktree_dir"))?
                 .to_string();
+        }
+    }
+    if let Some(a) = table.get("authoring") {
+        let t = a.as_table().ok_or_else(|| bad("authoring"))?;
+        if let Some(v) = t.get("approval") {
+            cfg.authoring.approval = v
+                .as_str()
+                .and_then(Approval::parse)
+                .ok_or_else(|| bad("authoring.approval"))?;
         }
     }
     if let Some(h) = table.get("harness") {
@@ -418,6 +467,15 @@ fn apply_env(cfg: &mut Config, env: &[(String, String)]) -> Result<(), CoreError
     }
     if let Some(v) = get("VITRIFY_RUN_WORKTREE_DIR") {
         cfg.run.worktree_dir = v;
+    }
+    if let Some(v) = get("VITRIFY_AUTHORING_APPROVAL") {
+        cfg.authoring.approval = Approval::parse(v.trim()).ok_or_else(|| {
+            CoreError::refusal(
+                2,
+                "error: environment variable VITRIFY_AUTHORING_APPROVAL \
+                 (authoring.approval) must be human or agent",
+            )
+        })?;
     }
     if let Some(v) = get("VITRIFY_HARNESS_PREFERRED") {
         cfg.harness.preferred = v;
@@ -611,6 +669,67 @@ mod tests {
         assert!(msg.contains("run.status_check_seconds"), "{msg}");
         assert!(msg.contains("config.toml"), "{msg}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn approval_defaults_to_human_and_resolves_env_over_repo_over_home() {
+        assert_eq!(
+            load_with(&[], &Overrides::default()).authoring.approval,
+            Approval::Human
+        );
+        let base = std::env::temp_dir().join(format!("vfy-cfg-approval-{}", std::process::id()));
+        let home = base.join("home");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(repo.join(".vitrify")).unwrap();
+        let env = |v: &str| vec![("VITRIFY_AUTHORING_APPROVAL".to_string(), v.to_string())];
+
+        // the home file over the default
+        std::fs::write(
+            home.join("config.toml"),
+            "[authoring]\napproval = \"agent\"\n",
+        )
+        .unwrap();
+        let cfg = load(Some(&repo), Some(&home), &[], &Overrides::default()).unwrap();
+        assert_eq!(cfg.authoring.approval, Approval::Agent);
+        // the repository's file over the home file
+        std::fs::write(
+            repo.join(".vitrify/config.toml"),
+            "[authoring]\napproval = \"human\"\n",
+        )
+        .unwrap();
+        let cfg = load(Some(&repo), Some(&home), &[], &Overrides::default()).unwrap();
+        assert_eq!(cfg.authoring.approval, Approval::Human);
+        // the environment over both
+        let cfg = load(
+            Some(&repo),
+            Some(&home),
+            &env("agent"),
+            &Overrides::default(),
+        )
+        .unwrap();
+        assert_eq!(cfg.authoring.approval, Approval::Agent);
+
+        // any other value is refused, naming the variable, or the key and its file
+        for bad in ["Agent", "auto", ""] {
+            let err = load(None, None, &env(bad), &Overrides::default()).unwrap_err();
+            let msg = format!("{err}");
+            assert!(msg.contains("VITRIFY_AUTHORING_APPROVAL"), "{msg}");
+            assert_eq!(err.exit_code(), 2);
+        }
+        for bad in ["\"auto\"", "true", "1"] {
+            std::fs::write(
+                repo.join(".vitrify/config.toml"),
+                format!("[authoring]\napproval = {bad}\n"),
+            )
+            .unwrap();
+            let err = load(Some(&repo), Some(&home), &[], &Overrides::default()).unwrap_err();
+            let msg = format!("{err}");
+            assert!(msg.contains("authoring.approval"), "{msg}");
+            assert!(msg.contains(".vitrify/config.toml"), "{msg}");
+            assert_eq!(err.exit_code(), 2);
+        }
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

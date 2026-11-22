@@ -26,7 +26,7 @@ pub const ASSETS: &[Asset] = &[
     Asset {
         rel_path: "briefs/authoring.md",
         body: include_str!("../assets/briefs/authoring.md"),
-        sha256: "26a134081e5aeb1d1566a8582450133ee31d13c4442d9f1f796e850d9ad228d6",
+        sha256: "97adfae975b9ae50d9298e7385d2a5bbe02f21b8f1a4d8ec2d02ff224412fe03",
     },
     Asset {
         rel_path: "briefs/build-unit.md",
@@ -36,7 +36,7 @@ pub const ASSETS: &[Asset] = &[
     Asset {
         rel_path: "briefs/change.md",
         body: include_str!("../assets/briefs/change.md"),
-        sha256: "8e7a973719e296c6d17f97f1f6065f5bdadd994bf45974c51ea8ec318daf381a",
+        sha256: "9fd901bbb84edff431f4553fd0ab5a0a9232a7b321eabc0b29a1a5513edbecc9",
     },
     Asset {
         rel_path: "briefs/escalation.md",
@@ -115,7 +115,7 @@ pub const ASSETS: &[Asset] = &[
 pub const CONFIG: Asset = Asset {
     rel_path: "config.toml",
     body: include_str!("../assets/config.toml"),
-    sha256: "00bdb50116970512cf75a1a16436e55c3bfe30b75e2ed43a5a7d534a05938c31",
+    sha256: "83f2770f5dd1d461b65c16dcb9b426944826b90258ce7cfdcd05b572edbcdae1",
 };
 
 /// Enumerate the complete embedded set.

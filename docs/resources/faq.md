@@ -84,7 +84,7 @@ Yes. Each needs its own slug and disjoint `scope_roots`; one SDD uses another's 
 
 ### How many workers run at once?
 
-Four by default (`run.worker_cap`, or `--cap`), across every SDD of a project run; the lane of a single-file SDD runs one at a time. Dispatch is continuous, so a unit starts as soon as it is claimable and a slot is free. See [Configuration](../cli/configuration.md).
+Twenty by default (`run.worker_cap`, or `--cap`), across every SDD of a project run; the lane of a single-file SDD runs one at a time. Dispatch is continuous, so a unit starts as soon as it is claimable and a slot is free. See [Configuration](../cli/configuration.md).
 
 ### What happens when a worker's attempt fails?
 

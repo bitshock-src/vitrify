@@ -264,7 +264,7 @@ Three settings bound a project run, each for the whole repository:
 
 | Setting | Default | Bounds |
 | --- | --- | --- |
-| `run.worker_cap` (`--cap N`) | 4 | model sessions at once, across every lane; also the cost dial |
+| `run.worker_cap` (`--cap N`) | 20 | model sessions at once, across every lane; also the cost dial |
 | `run.gate_jobs` (`--gate-jobs N`) | one per CPU core | commands at once, from every gate, re-check, and preflight in any lane |
 | `run.lane_cap` | no limit | lanes active at once, and so how many lane checkouts exist on disk |
 

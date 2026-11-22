@@ -110,7 +110,7 @@ Three settings bound a run, each for the whole repository. See [Configuration](.
 
 | Setting | Default | Bounds |
 | --- | --- | --- |
-| `run.worker_cap` (`--cap`) | 4 | model sessions at once, across every lane; also the cost dial, since each session is a model call |
+| `run.worker_cap` (`--cap`) | 20 | model sessions at once, across every lane; also the cost dial, since each session is a model call |
 | `run.gate_jobs` (`--gate-jobs`) | 0, one per core | commands at once: every §5 command and Verification row, from any gate, re-check, preflight, or culprit probe in any lane |
 | `run.lane_cap` | 0, no limit | lanes holding their checkouts on disk at once (integration, base and culprit-probe checkouts count as one); a lane's checkout is made, and its §5 Bootstrap, Build and Lint run, when it is first admitted, highest-priority work first, and a lane with nothing left to do gives its checkouts back |
 

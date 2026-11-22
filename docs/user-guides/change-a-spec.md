@@ -14,7 +14,7 @@ Your coding agent can land a change for you. In a session of Claude Code, Codex,
 | answer a question a build is waiting on | `Use vitrify cli to answer Q-###: <your answer>` |
 | add a feature to an SDD you have | `Use vitrify cli to add this feature: <its PRD, or its path>` |
 
-The agent finds the change procedure in `vitrify --help` — `vitrify brief change` — and follows it: it edits the text in place, writes the change entry, records it with `vitrify change apply`, gates it with `vitrify check`, and commits once. A change that revises the TDD, such as a feature, starts with the agent's questions, and you approve the revision before the SDD changes. It reports each entry with its version bump, its `Staleness applied` line, and what the next build rebuilds.
+The agent finds the change procedure in `vitrify --help` — `vitrify brief change` — and follows it: it edits the text in place, writes the change entry, records it with `vitrify change apply`, gates it with `vitrify check`, and commits once. A change that revises the TDD, such as a feature, starts with the agent's questions, and you approve the revision before the SDD changes — or, with `authoring.approval = "agent"` ([Configuration](../cli/configuration.md#fields)), the agent approves it once the SDD-readiness checklist passes. It reports each entry with its version bump, its `Staleness applied` line, and what the next build rebuilds.
 
 ## What You Build
 
