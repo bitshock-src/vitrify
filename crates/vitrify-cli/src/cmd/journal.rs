@@ -63,6 +63,7 @@ pub fn append(event: EventKind, args: AppendArgs) -> Result<u8, CoreError> {
         stale,
         cause: args.cause,
         findings: args.findings,
+        suite: None,
         sdd: inst.meta.get_str_or("version", "0.0.0").to_string(),
         commit: args.commit,
     };

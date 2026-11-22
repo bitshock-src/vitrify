@@ -1,0 +1,9 @@
+{
+  "findings": [
+    {
+      "sdd": "core",
+      "check": "L12",
+      "subject": "core U-002 → core U-002"
+    }
+  ]
+}

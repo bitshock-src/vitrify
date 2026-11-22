@@ -73,6 +73,149 @@ fn seeded_fixtures_report_exactly_their_own_finding() {
     }
 }
 
+/// `(sdd, check, subject)` of every finding: from `lint --all --json`'s
+/// reports, or from an `expected.json` that names each finding's SDD.
+fn sdd_finding_set(v: &serde_json::Value) -> Vec<(String, String, String)> {
+    let s = |x: &serde_json::Value| x.as_str().unwrap().to_string();
+    let mut set: Vec<(String, String, String)> = match v {
+        serde_json::Value::Array(reports) => reports
+            .iter()
+            .flat_map(|r| {
+                r["findings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| (s(&r["sdd"]), s(&x["check"]), s(&x["subject"])))
+                    .collect::<Vec<_>>()
+            })
+            .collect(),
+        _ => v["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| (s(&x["sdd"]), s(&x["check"]), s(&x["subject"])))
+            .collect(),
+    };
+    set.sort();
+    set
+}
+
+#[test]
+fn seeded_fixtures_across_sdds_report_exactly_their_own_findings() {
+    // pins in depends_on misused (L1), and what the graph across SDDs
+    // refuses: an authority without producers, a cycle through pins and a
+    // unit behind it (L12); and a cycle inside one SDD through a pin of its
+    // own contract (L12)
+    for (fixture, check) in [
+        ("lint-L1-pins", "L1"),
+        ("lint-L12", "L12"),
+        ("lint-L12-self-pin", "L12"),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        copy_dir(
+            &repo_root().join("fixtures/seeded").join(fixture),
+            tmp.path(),
+        );
+        let root = tmp.path().canonicalize().unwrap();
+        let out = vitrify(&root)
+            .args(["lint", "--all", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2), "{fixture}");
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let got = sdd_finding_set(&v);
+        let expected = sdd_finding_set(
+            &serde_json::from_str(&std::fs::read_to_string(root.join("expected.json")).unwrap())
+                .unwrap(),
+        );
+        assert_eq!(got, expected, "{fixture}");
+        for report in v.as_array().unwrap() {
+            for x in report["findings"].as_array().unwrap() {
+                assert_eq!(x["check"], check, "{fixture} leaked a foreign finding");
+                assert!(!x["remediation"].as_str().unwrap().is_empty(), "{x}");
+            }
+        }
+    }
+}
+
+#[test]
+fn l1_and_l12_name_cause_and_remediation() {
+    let tmp = tempfile::tempdir().unwrap();
+    copy_dir(
+        &repo_root().join("fixtures/seeded/lint-L1-pins"),
+        tmp.path(),
+    );
+    let root = tmp.path().canonicalize().unwrap();
+    vitrify(&root)
+        .args(["lint", "--sdd", "specs/app"])
+        .assert()
+        .code(2)
+        .stdout(
+            "[L1] U-003: depends_on names pin C-002, which U-003 does not consume → add C-002 to U-003's consumes, or remove it from U-003's depends_on\n\
+             [L1] U-004: depends_on names C-001, an internal contract of this SDD — name the unit instead → replace C-001 in U-004's depends_on with U-001\n\
+             [L1] U-005: depends_on names C-003, a transcription — it has no authority, so there is nothing to wait for → remove C-003 from U-005's depends_on\n",
+        );
+    vitrify(&root)
+        .args(["lint", "--sdd", "specs/old"])
+        .assert()
+        .code(2)
+        .stdout(
+            "[L1] U-001: depends_on names pin C-001, and this SDD declares schema_version 2.0 — a pin in depends_on is schema 2.1 → set schema_version: 2.1 in the SDD's core front matter (a PATCH change entry), or remove C-001 from U-001's depends_on\n",
+        );
+
+    let tmp = tempfile::tempdir().unwrap();
+    copy_dir(&repo_root().join("fixtures/seeded/lint-L12"), tmp.path());
+    let root = tmp.path().canonicalize().unwrap();
+    vitrify(&root)
+        .args(["lint", "--sdd", "specs/api"])
+        .assert()
+        .code(2)
+        .stdout(
+            "[L12] U-002: depends_on names pin C-002 (core C-001), and the Producer line of core C-001 names no unit → name the units of core that produce C-001 on its Producer line\n\
+             [L12] api U-001 → core U-002 → api U-001: depends_on graph across SDDs contains a cycle through pins → remove one of the cycle's depends_on edges — a pin a unit only reads stays in consumes alone\n\
+             [L12] U-003: waits behind the cycle api U-001 → core U-002 → api U-001 → break the cycle its own L12 finding names\n",
+        );
+    // breaking the cycle clears the cycle and the unit behind it
+    let unit = root.join("specs/core/units/U-002.md");
+    let text = std::fs::read_to_string(&unit).unwrap();
+    std::fs::write(&unit, text.replace("depends_on: [C-003]", "depends_on: []")).unwrap();
+    vitrify(&root)
+        .args(["lint", "--all"])
+        .assert()
+        .code(2)
+        .stdout(
+            "api: [L12] U-002: depends_on names pin C-002 (core C-001), and the Producer line of core C-001 names no unit → name the units of core that produce C-001 on its Producer line\n\
+             core: lint clean (L1–L12)\n",
+        );
+}
+
+#[test]
+fn l12_sees_a_cycle_through_a_pin_of_the_sdds_own_contract() {
+    // core C-004 pins core C-002, which U-002 produces; U-002 depends on
+    // C-004: U-002 waits on itself, through the pin
+    let tmp = tempfile::tempdir().unwrap();
+    copy_dir(
+        &repo_root().join("fixtures/seeded/lint-L12-self-pin"),
+        tmp.path(),
+    );
+    let root = tmp.path().canonicalize().unwrap();
+    vitrify(&root)
+        .args(["lint", "--sdd", "specs/core"])
+        .assert()
+        .code(2)
+        .stdout(
+            "[L12] core U-002 → core U-002: depends_on graph contains a cycle through a pin of this SDD's own contract → remove one of the cycle's depends_on edges — a pin a unit only reads stays in consumes alone\n",
+        );
+    // reading the pin without waiting on it clears the cycle
+    let unit = root.join("specs/core/units/U-002.md");
+    let text = std::fs::read_to_string(&unit).unwrap();
+    std::fs::write(&unit, text.replace("depends_on: [C-004]", "depends_on: []")).unwrap();
+    vitrify(&root)
+        .args(["lint", "--sdd", "specs/core"])
+        .assert()
+        .code(0);
+}
+
 #[test]
 fn l2_follows_gitignore_not_ecosystem_names() {
     // L2's exhaustiveness covers what git would commit: ignored files never
@@ -128,7 +271,7 @@ fn lint_fixture_base_is_clean() {
         .args(["lint"])
         .assert()
         .success()
-        .stdout("lint clean (L1–L11)\n");
+        .stdout("lint clean (L1–L12)\n");
 }
 
 #[test]
@@ -297,7 +440,7 @@ fn built_leaves_out_l7_and_nothing_else() {
         .args(["lint", "--built"])
         .assert()
         .success()
-        .stdout("lint clean (L1–L11)\n");
+        .stdout("lint clean (L1–L12)\n");
     // a real finding still shows
     edit(
         &root,
@@ -513,7 +656,7 @@ fn all_lints_every_sdd_of_the_repository() {
         .args(["lint", "--all"])
         .assert()
         .success()
-        .stdout("alpha: lint clean (L1–L11)\nbeta: lint clean (L1–L11)\n");
+        .stdout("alpha: lint clean (L1–L12)\nbeta: lint clean (L1–L12)\n");
 
     // one SDD's finding does not hide the other's result, and names its SDD
     edit(
@@ -526,7 +669,7 @@ fn all_lints_every_sdd_of_the_repository() {
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         String::from_utf8(out.stdout).unwrap(),
-        "alpha: lint clean (L1–L11)\nbeta: [L1] U-002: depends_on references nonexistent unit U-007 → remove U-007 from U-002's depends_on, or add unit U-007\n"
+        "alpha: lint clean (L1–L12)\nbeta: [L1] U-002: depends_on references nonexistent unit U-007 → remove U-007 from U-002's depends_on, or add unit U-007\n"
     );
     let out = vitrify(&root)
         .args(["lint", "--all", "--json"])
@@ -552,7 +695,7 @@ fn all_lints_every_sdd_of_the_repository() {
         .args(["lint", "--sdd", "specs/alpha"])
         .assert()
         .success()
-        .stdout("lint clean (L1–L11)\n");
+        .stdout("lint clean (L1–L12)\n");
 }
 
 #[test]

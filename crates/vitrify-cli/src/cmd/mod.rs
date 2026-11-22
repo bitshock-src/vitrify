@@ -27,6 +27,7 @@ use vitrify_core::CoreError;
 use vitrify_core::audit as core_audit;
 use vitrify_core::config::{self, Config, Overrides};
 use vitrify_core::contract::{self, Peers};
+use vitrify_core::graph::UnitGraph;
 use vitrify_core::model::{self, Instance, SddHandle};
 
 /// The governed files under the SDD's `scope_roots` — what git would commit
@@ -65,6 +66,54 @@ pub fn discover(root: &Path) -> Vec<SddHandle> {
 /// contract's authority is looked up in — found only if something asks.
 pub fn peers(root: &Path) -> Peers<'_> {
     Peers::new(move || discover(root))
+}
+
+/// The SDDs of the repository at `root` that load, each with the error of
+/// one that does not (a schema version this vitrify does not read), in
+/// discovery order. `own`, loaded already, stands in for its discovered
+/// copy, or joins them when discovery does not find it.
+pub fn loaded(root: &Path, own: Option<&Instance>) -> (Vec<Instance>, Vec<(SddHandle, CoreError)>) {
+    let mut insts: Vec<Instance> = Vec::new();
+    let mut refused: Vec<(SddHandle, CoreError)> = Vec::new();
+    for h in discover(root) {
+        if let Some(own) = own
+            && same_root(&h.root, &own.root)
+        {
+            insts.push(own.clone());
+            continue;
+        }
+        match Instance::load(h.clone()) {
+            Ok(inst) => insts.push(inst),
+            Err(e) => refused.push((h, e)),
+        }
+    }
+    if let Some(own) = own
+        && !insts.iter().any(|i| same_root(&i.root, &own.root))
+    {
+        insts.push(own.clone());
+    }
+    (insts, refused)
+}
+
+fn same_root(a: &Path, b: &Path) -> bool {
+    a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if x == y)
+}
+
+/// The repository's unit graph over every SDD that loads ([`loaded`]):
+/// what pins in `depends_on` resolve against.
+pub fn repo_graph(root: &Path, own: Option<&Instance>) -> Result<UnitGraph, CoreError> {
+    UnitGraph::build(&loaded(root, own).0)
+}
+
+/// Whether a unit of `inst` names, in `depends_on`, anything but a unit of
+/// its own SDD — so its claimability needs the repository's graph.
+pub fn reaches_out(inst: &Instance) -> bool {
+    inst.units.iter().any(|u| {
+        u.meta
+            .get_list("depends_on")
+            .iter()
+            .any(|d| inst.unit(d).is_none())
+    })
 }
 
 /// The SDDs a verb acts on: the one `--sdd` names, or the repository's only

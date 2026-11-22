@@ -24,6 +24,12 @@ Options:
       --wait
           When only blocked units remain, keep running and resume when the spec changes, instead of ending Blocked
 
+      --recheck
+          Trust no recorded check: run every Verified unit's rows and the §5 Test command again (rebuilds nothing; built attempts are still adopted)
+
+      --upstream
+          With --sdd: build the SDDs it depends on too, each a lane of one project run
+
       --sdd <ROOT>
           SDD root to build: a bundle directory, its sdd.md, or a single *.sdd.md (default: the one SDD in the repository)
 
@@ -33,38 +39,65 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
-Builds one SDD until it is Complete or Blocked: claims, dispatches workers, integrates,
-publishes. Interrupt it (Ctrl-C, kill -INT <pid>), never its workers; running it again resumes.
-Reads:   the SDD on mainline; ~/.vitrify/config.toml (the recorded harness spelling and
-         the role profiles); the §5 commands it runs
-Writes:  published mainline commits (claims, renewals, releases, each Verified unit);
+Builds until Complete or Blocked: claims, dispatches workers, integrates, publishes.
+With several SDDs and no --sdd it is a project run: every Active SDD is a lane, one scheduler
+dispatches across them critical path first, and each SDD's dependents re-check after the
+merge. --sdd builds one SDD as a single lane; --upstream adds the SDDs it depends on.
+Interrupt it (Ctrl-C, kill -INT <pid>), never its workers; running it again resumes.
+Reads:   the SDDs on mainline; ~/.vitrify/config.toml (the recorded harness spelling and
+         the role profiles); the §5 commands it runs; with run.priority = "history",
+         earlier runs' records
+Writes:  published mainline commits (claims, renewals, releases, each Verified unit, the
+           re-checks it made: `verified` events by recheck, suite: "pass");
          .vitrify/run.json, the latest run's snapshot, its report null until it ends;
-         .vitrify/logs/<job>/: run.json, gate.json, events.jsonl (one line per event),
-           report.txt (the final report), worker-<holder>.out, .err and .prompt.md,
-           escalation-<n>.json;
-         unit worktrees and the integration checkout under run.worktree_dir.
-         --dry-run publishes nothing and moves no file.
-Prints:  stdout: the job header (SDD build job — <sdd> @ <version>  [<job>], Done-condition,
-         Mainline, Plan, Workers, Roles, Worktrees, Parameters), then, before anything is
-         dispatched:
+         .vitrify/logs/<job>/: run.json, project.json (the plan, each lane's state and
+           records path, the critical path as it ran), events.jsonl (one line per event,
+           a lane's naming it; in a project run a `pass` line per change in the slots),
+           report.txt (the final report);
+         .vitrify/logs/<job>/<slug>/, one per lane: gate.json, worker-<holder>.out, .err
+           and .prompt.md, escalation-<n>.json;
+         under run.worktree_dir: unit worktrees, and per SDD its integration checkout
+           (mainline-<slug>, made anew each run) with its lock, its base checkout
+           (base-<slug>) and its culprit probe checkout (probe-<slug>).
+         --dry-run publishes nothing and touches no file of the repository.
+Prints:  stdout, a project run: Project build job — <n> SDDs: <lane states>  [<job>], Plan,
+         Critical path, Capacity, Watch; one [<slug>] line per event; the final report:
+         Complete. or Blocked., then one line per SDD — its slug, its state (Complete,
+         Up to date or Blocked) and why — each further blocker indented below.
+         Lane states: idle, build, recheck, up to date, complete, blocked.
+         stdout, one SDD: the job header (SDD build job — <sdd> @ <version>  [<job>],
+         Done-condition, Mainline, Plan, Workers, Roles, Worktrees, Parameters), then,
+         before anything is dispatched:
            Watch: vitrify run status --job <job> [--follow] · once it ends, the same command
            prints the report · procedure: vitrify brief run
-         then one line per event, then one final report: Complete. or Blocked., the progress
-         line, each blocker, the journal tail (replay: exit 0 (consistent)).
-         --dry-run: the header and any claim it would recover, ending
-           Start: vitrify run <the flags given, without --dry-run>
+         then one line per event — [<slug>] <unit> adopted (built attempt c<n>) → gate,
+         [<slug>] <unit> rotten: …, [<slug>] <culprit finding> among them — then one final
+         report: Complete. or Blocked., the progress line, each blocker (a rotten unit
+         with its culprit), the journal tail (replay: exit 0 (consistent)).
+         Only the rows of units a change reached since their last recorded check run, at
+           the start and in each gate; with nothing to build or re-check, none run.
+         --recheck: every Verified unit's rows and the §5 Test command run again.
+         --dry-run: the header and any claim it would recover (a project run: the whole
+           plan, lane by lane — the same for the same repository and configuration),
+           ending Start: vitrify run <the flags given, without --dry-run>
          stderr: worker reports, gate failures, notes, warnings, and each
            preflight failed: <cause> → <fix>
 Exit status: 0 Complete. (--dry-run: preflight passed) · 2 Blocked., a preflight failure,
-         an abort verdict, or a usage error · 1 an error, its message last on stderr.
+         an abort verdict, or a usage error · 1 an error, its message last on stderr ·
+         4 a project run with an SDD at schema 2.0 whose units consume pins.
          An interrupted run cleans up and ends by the signal it received.
 Config:  mainline (VITRIFY_MAINLINE) · run.worker_cap (VITRIFY_RUN_WORKER_CAP, --cap)
          · run.lease_minutes · run.renew_fraction · run.abort_failed_waves
-         · run.worker_timeout_minutes · run.gate_jobs (--gate-jobs) · run.poll_seconds
-         · run.worktree_dir · harness.preferred · lint.readset_budget_bytes;
+         · run.worker_timeout_minutes · run.gate_jobs (--gate-jobs)
+         · run.poll_seconds · run.lane_cap · run.priority · run.worktree_dir
+         · harness.preferred
+         · lint.readset_budget_bytes;
          each key's variable is VITRIFY_<SECTION>_<KEY> (VITRIFY_RUN_GATE_JOBS, …)
 Examples:
+  vitrify run --dry-run
+  vitrify run --sdd specs/api --upstream
   vitrify run --dry-run --sdd specs/calc
   vitrify run --sdd specs/calc
   vitrify run --cap 2 --gate-jobs 1 --wait
+  vitrify run --recheck
 Procedure: vitrify brief run

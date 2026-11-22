@@ -190,6 +190,60 @@ impl Git {
         self.run(&["merge-base", a, b])
     }
 
+    /// The object each of `names` (`<rev>:<path>`, `<rev>^{commit}`, …)
+    /// names, in order, `None` where there is none: one `git cat-file
+    /// --batch-check` for all of them.
+    pub fn object_ids(&self, names: &[String]) -> Result<Vec<Option<String>>, GitError> {
+        use std::io::Write;
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let failed = |e: std::io::Error| GitError::Failed {
+            cmd: "cat-file --batch-check".to_string(),
+            code: -1,
+            stderr: e.to_string(),
+        };
+        let mut child = Command::new("git")
+            .args(["cat-file", "--batch-check=%(objectname)"])
+            .current_dir(&self.dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(failed)?;
+        // written from a thread of its own: a long list would otherwise
+        // fill the pipe both ways
+        let input: String = names.iter().map(|n| format!("{n}\n")).collect();
+        let stdin = child.stdin.take();
+        let writer = std::thread::spawn(move || {
+            if let Some(mut stdin) = stdin {
+                let _ = stdin.write_all(input.as_bytes());
+            }
+        });
+        let out = child.wait_with_output().map_err(failed)?;
+        let _ = writer.join();
+        if !out.status.success() {
+            return Err(GitError::Failed {
+                cmd: "cat-file --batch-check".to_string(),
+                code: out.status.code().unwrap_or(-1),
+                stderr: stderr_tail(&out),
+            });
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let ids: Vec<Option<String>> = text
+            .lines()
+            .map(|l| (!l.ends_with(" missing") && !l.contains(' ')).then(|| l.to_string()))
+            .collect();
+        if ids.len() != names.len() {
+            return Err(GitError::Failed {
+                cmd: "cat-file --batch-check".to_string(),
+                code: -1,
+                stderr: format!("{} answers for {} names", ids.len(), names.len()),
+            });
+        }
+        Ok(ids)
+    }
+
     /// Repo-relative paths that differ between two commits (`git diff
     /// --name-only --no-renames -z`): a rename lists both its sides.
     pub fn changed_paths(&self, from: &str, to: &str) -> Result<Vec<String>, GitError> {
@@ -501,6 +555,13 @@ impl Git {
         Ok(())
     }
 
+    /// Remove every file git does not track, ignored ones included, and
+    /// nested repositories too (`clean -ffdx`).
+    pub fn clean_all(&self) -> Result<(), GitError> {
+        self.run(&["clean", "-ffdxq"])?;
+        Ok(())
+    }
+
     // ------------------------------------------------------- branches
 
     pub fn create_branch(&self, name: &str, rev: &str) -> Result<(), GitError> {
@@ -630,6 +691,42 @@ impl Git {
 
     pub fn log_oneline(&self, n: usize) -> Result<String, GitError> {
         self.run(&["log", "--oneline", &format!("-{n}")])
+    }
+
+    // ------------------------------------------------------- incremental
+
+    /// The commits on the first-parent chain of `to` that `from` does not
+    /// reach, oldest first (`rev-list --first-parent --reverse from..to`).
+    pub fn first_parent_range(&self, from: &str, to: &str) -> Result<Vec<String>, GitError> {
+        let out = self.run(&[
+            "rev-list",
+            "--first-parent",
+            "--reverse",
+            &format!("{from}..{to}"),
+        ])?;
+        Ok(out
+            .lines()
+            .map(str::to_string)
+            .filter(|l| !l.is_empty())
+            .collect())
+    }
+
+    /// The subject line of a commit (`log -1 --format=%s`).
+    pub fn subject(&self, rev: &str) -> Result<String, GitError> {
+        self.run(&["log", "-1", "--format=%s", rev])
+    }
+
+    /// The abbreviated name of a commit (`rev-parse --short`).
+    pub fn short_sha(&self, rev: &str) -> Result<String, GitError> {
+        self.run(&["rev-parse", "--short", rev])
+    }
+
+    /// The full name of the commit `rev` names (`rev-parse -q --verify
+    /// <rev>^{commit}`) — a recorded short sha, say; `None` when it names
+    /// no commit here: history rewritten, a shallow clone, an ambiguous
+    /// prefix.
+    pub fn resolve_commit(&self, rev: &str) -> Result<Option<String>, GitError> {
+        self.verify_ref(&format!("{rev}^{{commit}}"))
     }
 }
 

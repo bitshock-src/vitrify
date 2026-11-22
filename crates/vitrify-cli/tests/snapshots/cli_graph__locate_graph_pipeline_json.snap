@@ -1,0 +1,140 @@
+---
+source: crates/vitrify-cli/tests/cli_graph.rs
+expression: stdout(&out)
+---
+{
+  "sdds": [
+    "api",
+    "core"
+  ],
+  "sdd_edges": [
+    {
+      "from": "api",
+      "to": "core",
+      "pins": [
+        "C-001",
+        "C-002"
+      ],
+      "units": [
+        {
+          "from": {
+            "sdd": "api",
+            "unit": "U-001"
+          },
+          "to": {
+            "sdd": "core",
+            "unit": "U-001"
+          },
+          "via": "C-001"
+        },
+        {
+          "from": {
+            "sdd": "api",
+            "unit": "U-002"
+          },
+          "to": {
+            "sdd": "core",
+            "unit": "U-002"
+          },
+          "via": "C-002"
+        }
+      ]
+    }
+  ],
+  "unit_edges": [
+    {
+      "from": {
+        "sdd": "api",
+        "unit": "U-001"
+      },
+      "to": {
+        "sdd": "core",
+        "unit": "U-001"
+      },
+      "via": "C-001"
+    },
+    {
+      "from": {
+        "sdd": "api",
+        "unit": "U-002"
+      },
+      "to": {
+        "sdd": "api",
+        "unit": "U-001"
+      },
+      "via": null
+    },
+    {
+      "from": {
+        "sdd": "api",
+        "unit": "U-002"
+      },
+      "to": {
+        "sdd": "core",
+        "unit": "U-002"
+      },
+      "via": "C-002"
+    },
+    {
+      "from": {
+        "sdd": "api",
+        "unit": "U-003"
+      },
+      "to": {
+        "sdd": "api",
+        "unit": "U-002"
+      },
+      "via": null
+    },
+    {
+      "from": {
+        "sdd": "core",
+        "unit": "U-002"
+      },
+      "to": {
+        "sdd": "core",
+        "unit": "U-001"
+      },
+      "via": null
+    },
+    {
+      "from": {
+        "sdd": "core",
+        "unit": "U-003"
+      },
+      "to": {
+        "sdd": "core",
+        "unit": "U-002"
+      },
+      "via": null
+    }
+  ],
+  "order": [
+    {
+      "sdd": "core",
+      "unit": "U-001"
+    },
+    {
+      "sdd": "api",
+      "unit": "U-001"
+    },
+    {
+      "sdd": "core",
+      "unit": "U-002"
+    },
+    {
+      "sdd": "api",
+      "unit": "U-002"
+    },
+    {
+      "sdd": "api",
+      "unit": "U-003"
+    },
+    {
+      "sdd": "core",
+      "unit": "U-003"
+    }
+  ],
+  "cycles": [],
+  "waiting": []
+}

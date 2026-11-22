@@ -36,6 +36,14 @@ Use this table to jump to the section for your symptom.
 | `claim`, `renew`, or `release` exits 4, 5, or 6 | [A Claim Transaction Fails](#a-claim-transaction-fails) |
 | `pin list` shows `stale`, `missing-authority`, or `invalid` | [An External Contract Is Out of Step](#an-external-contract-is-out-of-step) |
 | a run was killed, or a worker outlived its run | [A Run Was Killed](#a-run-was-killed) |
+| a project run refuses with exit 4 and names an SDD at schema 2.0 | [A Project Run Refuses an SDD at Schema 2.0](#a-project-run-refuses-an-sdd-at-schema-20) |
+| a run refuses with `[L12] dependency cycle:` | [A Project Run Refuses a Cycle](#a-project-run-refuses-a-cycle) |
+| a unit is not built and its blocker reads `waits on <slug> <unit>` | [A Unit Waits on Another SDD's Unit](#a-unit-waits-on-another-sdds-unit) |
+| an SDD's lane is `Blocked` before any unit was tried | [A Lane Is Blocked at Preflight](#a-lane-is-blocked-at-preflight) |
+| a unit is `rotten`, or a report names a culprit | [A Unit Is Rotten](#a-unit-is-rotten) |
+| a report says a row `is flaky` | [A Row Is Reported Flaky](#a-row-is-reported-flaky) |
+| nothing re-ran after a change, or something should have | [Nothing Re-ran After a Change](#nothing-re-ran-after-a-change) |
+| lane checkouts fill the disk | [Lane Checkouts Use Too Much Disk](#lane-checkouts-use-too-much-disk) |
 
 ## vitrify Is Not Set Up on This Machine
 
@@ -73,7 +81,7 @@ A verb that acts on one SDD exits 4 when it finds none, or when it finds several
 
 - **None found.** The refusal names where to start: `error: no SDD found in repository → start one: vitrify brief authoring (or vitrify new sdd inside specs/)`. An SDD counts only if its front matter has an `sdd` key. Discovery searches `specs/*/sdd.md`, then `specs/*.sdd.md`, then the files git would commit — so an SDD under an ignored path is never found.
 - **Several found.** The refusal prints the candidates as `--sdd` values (`--sdd specs/alpha`, …). Pass one of them, or `--all` on the verbs that take it: `lint`, `check`, `audit`, `ledger`, `pin`, `journal replay`, `change apply`, and `questions`.
-- **Found but refused.** This vitrify reads `schema_version: 2.0` only, and the key is required. An SDD that lacks it or declares another version is still listed by `locate`, and every verb that would read it exits 4 with a message naming `2.0`, such as `error: <file>: schema_version is missing; this vitrify reads 2.0 → vitrify schema show`. Write the SDD to the 2.0 schema and declare `schema_version: 2.0` in its core front matter; see [Versioning](../reference/formats.md#10-versioning).
+- **Found but refused.** This vitrify reads `schema_version` `2.0` and `2.1`, and the key is required. An SDD that lacks it or declares another version is still listed by `locate`, and every verb that would read it exits 4 with a message naming both, such as `error: <file>: schema_version is missing; this vitrify reads 2.0 and 2.1 → vitrify schema show`. Write the SDD to the schema and declare `schema_version: 2.1` in its core front matter; see [Versioning](../reference/formats.md#10-versioning).
 
 ## No Run Recorded, or No Output Kept
 
@@ -91,7 +99,7 @@ Lint exits 2 and prints one `[L#] subject: cause → remediation` line per findi
 
 | Check | Usual cause | Fix |
 | --- | --- | --- |
-| L1 | a `depends_on` names a missing unit, or the graph has a cycle | Correct the ID, or break the cycle. |
+| L1 | a `depends_on` names a missing unit, an internal contract or a transcription, or a pin the unit does not consume (or any pin, under schema 2.0); or the graph has a cycle | Correct the ID or name the unit; add the pin to `consumes`, or set `schema_version: 2.1`; break the cycle. |
 | L2 | two units' `owns` overlap, or a file under `scope_roots` is unowned | Narrow the globs; add the file to one unit or to `unmanaged:`. |
 | L3 | a unit depends on a unit in its own parallel group | Move one of them out of the group. |
 | L4 | a consumed contract is missing, or a `Consumers:` line disagrees with `consumes` | Restore the contract, or make the line name exactly the consumers. |
@@ -102,15 +110,19 @@ Lint exits 2 and prints one `[L#] subject: cause → remediation` line per findi
 | L9 | a pin does not match its authority, names one that is not there, or is declared wrongly | Run `vitrify pin sync --sdd <root>` for a stale pin; see [An External Contract Is Out of Step](#an-external-contract-is-out-of-step). |
 | L10 | `version` or `updated` is not the last change entry's, or a single file's entry is outside `## Changelog` | Make both match the last change entry; write a single file's entries as `### CH-###` under `## Changelog`. |
 | L11 | `tdd:` names no file, or an Active SDD pins an unapproved or superseded TDD | Fix the path, or re-pin under a change entry. |
+| L12 | a pin in `depends_on` whose authority names no producer units, or a cycle through pins, across SDDs or through a pin of the SDD's own contract (and the units waiting behind it) | Name the producing units on the authority's `Producer:` line; keep a pin the unit only reads in `consumes` alone; `vitrify locate --graph` shows the edges. |
 
 ## `vitrify run` Exits 2 With `preflight failed`
 
-Nothing was started. Each `preflight failed: <cause> → <fix>` line names one gate and its fix; `vitrify run --dry-run` reproduces the whole preflight without starting anything. [Runs](../about/concepts/runs.md#preflight) lists every check with its fix; use this table for the details.
+Nothing was started. Each `preflight failed: <cause> → <fix>` line names one gate and its fix; `vitrify run --dry-run` reproduces the whole preflight without starting anything. [Runs](../about/concepts/runs.md#preflight) lists every check with its fix; use this table for the details. In a project run, a failure of one SDD's own checks — its status, uncommitted changes, lint, audit, or §5 commands — does not refuse the run: it blocks that SDD's lane, as the line `[<slug>] preflight failed: …` ([A Lane Is Blocked at Preflight](#a-lane-is-blocked-at-preflight)). Every other failure here refuses the run.
 
 | Failure | Fix |
 | --- | --- |
-| no SDD is found, or several and no `--sdd` | Start one with `vitrify brief authoring`, or pass one of the printed `--sdd` values. |
+| no SDD is found, an `--sdd` is outside the repository, or no SDD of the repository is Active | Start one with `vitrify brief authoring`, pass an `--sdd` inside the repository, or finish authoring one and set it Active. |
+| `--upstream` is given without `--sdd` | Pass `--sdd <root>` with it: it adds the SDDs that SDD depends on. |
 | the SDD is not Active, has uncommitted changes under its root, or shares its slug | Set `status: Active`, commit or stash the changes under its root, and give every SDD a unique `sdd:` slug. |
+| the local mainline holds commits `origin/<branch>` does not | Publish them first: `git push origin <branch>`. A run builds origin's head, so they would be left out. |
+| the unit graph has a cycle, or a `depends_on` entry leads nowhere | See [A Project Run Refuses a Cycle](#a-project-run-refuses-a-cycle); fix each `[L1]` or `[L12]` line. |
 | lint findings | Fix them; preflight runs `vitrify lint --built`. |
 | audit findings | Fix them; lapsed leases alone are released automatically. An unmarked trace mismatch needs its change entry applied with `vitrify change apply` — see [Change a Spec](../user-guides/change-a-spec.md). |
 | a §5 Bootstrap, Build, or Lint command fails | Run it exactly as written from the repository root and fix it; it must be non-interactive. |
@@ -122,13 +134,13 @@ Nothing was started. Each `preflight failed: <cause> → <fix>` line names one g
 
 The usual cause is a headless session that is not allowed to do its job: nobody is there to answer a permission prompt, so whatever the harness would ask about is refused. Other causes are a harness that is signed out, a model the account cannot reach, and a session that ends without a parseable report line.
 
-Check the worker's own account first: its `report [w<i>] …` line on stderr, its `outcome` in `.vitrify/run.json` (`released`, `timeout`), and the end of `.vitrify/logs/<job>/worker-<job>-w<i>.out` and `.err`.
+Check the worker's own account first: its `report [w<i>] …` line on stderr, its `outcome` in `.vitrify/run.json` (`released`, `timeout`), and the end of `.vitrify/logs/<job>/<slug>/worker-<job>-w<i>.out` and `.err`.
 
 Fix it by granting the `worker` and `retry` roles what they need through `args` in the role profiles of `~/.vitrify/config.toml` — see [Grant Worker Permissions](../cli/harnesses.md#grant-worker-permissions) — then run `vitrify probe`. A missing or unparseable report is treated as `released`; the report format is in the [Data Model and Formats Specification](../reference/formats.md#9-worker-report-line-and-escalation-verdict).
 
 ## A Worker Is Quiet
 
-`vitrify run status` warns when a worker's log has not grown for `--quiet-after` seconds (300 by default). Every recorded harness spelling streams, so a quiet log means the session itself is quiet: a long-running command in the worktree, a long model turn, or a session waiting on something nobody will answer, such as a permission prompt. Look at the end of its log, `.vitrify/logs/<job>/worker-<job>-w<i>.out`, and at its worktree. A worker that stays quiet until its hard budget is stopped at `worker_timeout_minutes`, and its claim is released; if every worker does that, see [Workers Make No Progress](#workers-make-no-progress-or-every-attempt-is-released).
+`vitrify run status` warns when a worker's log has not grown for `--quiet-after` seconds (300 by default). Every recorded harness spelling streams, so a quiet log means the session itself is quiet: a long-running command in the worktree, a long model turn, or a session waiting on something nobody will answer, such as a permission prompt. Look at the end of its log, `.vitrify/logs/<job>/<slug>/worker-<job>-w<i>.out`, and at its worktree. A worker that stays quiet until its hard budget is stopped at `worker_timeout_minutes`, and its claim is released; if every worker does that, see [Workers Make No Progress](#workers-make-no-progress-or-every-attempt-is-released).
 
 ## The Gate Rejects Work
 
@@ -167,7 +179,7 @@ Two lines mean a unit will not be tried again in this run:
 
 ## The Run Ends Blocked
 
-`Blocked.` names every unfinished unit's blocker, and exits 2. [Resolve a Blocked Build](../user-guides/run-a-build.md#resolve-a-blocked-build) maps each blocker line to its fix; `vitrify questions --open` lists the open questions and the units each holds up.
+`Blocked.` names every unfinished unit's blocker, and exits 2. A run of one SDD prints the progress line, then each blocker, then the journal tail; a project run prints one line per SDD (`api      Blocked      U-007 rotten: …`) with further blockers indented below it, and it is Blocked when any SDD is. [Resolve a Blocked Build](../user-guides/run-a-build.md#resolve-a-blocked-build) maps each blocker line to its fix; `vitrify questions --open` lists the open questions and the units each holds up.
 
 ## The Primary Checkout Is Behind
 
@@ -210,6 +222,88 @@ These read-only checks exit 3 when the recorded state disagrees with itself.
 - **An entry is outside `## Changelog`** (``error: gamma: CH-002: a change entry outside `## Changelog` is not read: …``). A single-file SDD reads its entries only under `## Changelog`, as `###` headings: a `## CH-###` heading ends that section. Write it as `### CH-### — …` under `## Changelog`.
 
 When it prints `already recorded — nothing to apply`, `Draft — nothing to apply`, or `no change entry — nothing to apply`, nothing is wrong: running it again is safe.
+
+## A Project Run Refuses an SDD at Schema 2.0
+
+A project run — a plain `vitrify run` with several SDDs, or `vitrify run --sdd <root> --upstream` — refuses with exit 4, starting nothing, while any SDD of the repository at `schema_version` 2.0 has units that consume pins. Each such SDD gets a line:
+
+```text
+preflight failed: SDD api (specs/api/sdd.md) is at schema 2.0 and its units consume pins — under 2.0 nothing says which pins a unit needs built first → migrate it to schema 2.1 and list the pins its units need in depends_on
+```
+
+Under 2.0 a pin a unit consumes might be an interface read or a code need not yet declared, and a project run does not guess. Classify each pin, add the code pins to `depends_on`, set `schema_version: 2.1`, and record all of it as one PATCH change entry: [Migrate an SDD to Schema 2.1](../user-guides/change-a-spec.md#migrate-an-sdd-to-schema-21). `vitrify run --sdd specs/api` builds a 2.0 SDD alone in the meantime.
+
+## A Project Run Refuses a Cycle
+
+Exit 2, nothing started. Every cycle through `depends_on` is printed as the path that closes it, one line each, then the units that only wait behind a cycle:
+
+```text
+preflight failed: [L12] dependency cycle: core U-004 → api U-002 → core U-006 → core U-004 → break the cycle: remove one depends_on entry on that path
+preflight failed: 2 units wait behind a cycle: web U-001, web U-003 → waiting units build once the cycle is broken
+```
+
+Read each path from left to right: every unit depends on the one after it, and the last is the first again. Break each cycle by removing one `depends_on` entry on its path. Only entries that wait are on a path, so a pin a unit reads only in `consumes` is never part of one: if a unit lists a pin in `depends_on` that it only reads as an interface or as data, take it out of `depends_on` and keep it in `consumes`. A unit named as waiting is not on a cycle; it builds once the cycles are broken. `vitrify locate --graph` prints the edges (add `--json` for the unit graph and its order), and `vitrify lint` reports the same cycles as L12. Pins running both ways between two SDDs are normal and are not cycles. A cycle that appears on mainline while a run is going (a spec change committed meanwhile) is reported once as `a dependency cycle on mainline: <path> — nothing on it or behind it is dispatched`, and the units not on or behind it keep building.
+
+## A Unit Waits on Another SDD's Unit
+
+A unit whose `depends_on` names a pin is not claimable until every unit on the authority's `Producer:` line is built, in whichever SDD. `vitrify locate --units` shows it as not claimable, and the final report (and `vitrify run status`, which names the units another lane holds back) names what it waits on:
+
+```text
+waits on core U-002 (Ready)
+```
+
+This is normal: the producer's lane builds it, and the unit starts as soon as it lands. If the producer is rotten, the line reads `waits on core U-002 (rotten)` (`waits on U-002 (rotten)` for a unit of the same SDD) (see [A Unit Is Rotten](#a-unit-is-rotten)); otherwise it names the producer's own blocker. A run that builds one SDD with `--sdd` does not build the producer, and the blocker says so:
+
+```text
+waits on core U-002, outside this run (SDD core not selected; --upstream builds it)
+```
+
+Build the producer first, or add `--upstream` to build the SDDs this one depends on in the same run. If the wait is not intended, the unit lists in `depends_on` a pin it only reads: move it to `consumes` alone, as a change entry.
+
+## A Lane Is Blocked at Preflight
+
+In a project run each lane runs its own preflight before anything is dispatched: the SDD must be Active, with nothing uncommitted under its root, and lint, the audit, and the journal replay must pass; then the §5 Bootstrap, Build, and Lint commands run in a checkout the lane makes anew at the mainline head. A failure blocks that lane and names its cause and fix on stderr as `[<slug>] preflight failed: <cause> → <fix>`; the final report shows the lane as `Blocked` with `preflight failed: …`. In a run of one SDD the same failure refuses the run instead (exit 2, `preflight failed: …` without the slug). The table in [`vitrify run` Exits 2 With `preflight failed`](#vitrify-run-exits-2-with-preflight-failed) covers each. The units that depend on the blocked lane's units wait, and every lane that does not depend on it keeps building. Fix the lane, commit, and run again; an SDD that was not Active when the run started, and becomes Active on mainline while it runs, joins as a lane after the same preflight. A Bootstrap or Build that passes only in your checkout usually leans on a file git ignores, because every lane starts from a pristine checkout: reproduce it in a fresh clone.
+
+## A Unit Is Rotten
+
+A Verified unit is **rotten** when its rows fail after a change upstream and fail on the base commit too, so the change being checked did not break them. The run says so and starts a culprit search without holding anything else up:
+
+```text
+[api] U-007 rotten: row 2 fails on mainline at a1b2c3d — finding the culprit
+```
+
+The search runs off the critical path, probing the mainline commits since the unit's last check one at a time, and ends in one line per row, printed when it ends, logged as a `culprit` event, and repeated in the final report:
+
+```text
+[api] U-007 row 2 broke at a1b2c3d (core U-004 integrated) — culprit found
+```
+
+The line names the commit and the upstream unit it integrated. A rotten unit is reported, never regenerated: either the upstream broke its contract, or the unit relied on more than the contract, which is a person's call. Fix the upstream, change the unit's spec, or add the dependency the unit has on that code to its `depends_on`. The units that wait on it read `waits on api U-007 (rotten)` (`waits on U-007 (rotten)` within the same SDD); the rest of its lane lands. A row that fails at the start of a run, in its re-check, makes its unit rotten the same way; so does a row of an already Verified unit that fails at a gate and also fails on the gate's base, where the batch being merged is judged on its other rows. Two other endings are possible: the search ran out of probes (`broke, culprit not found after <n> probes (most likely <commit>, …) — inconclusive`), or the row fails at the unit's own last check (`fails at its own last check — no commit to search — inconclusive`). Run the row yourself on the commit the line names. [Gates](../about/concepts/gates.md#rotten-units-and-culprits) explains the search.
+
+## A Row Is Reported Flaky
+
+A culprit search that finds no commit since the unit's last check broke the row concludes that the row is flaky:
+
+```text
+[api] U-007 row 2 is flaky: no commit since its last check broke it — fix the row (`<the row's command>`); the unit is re-checked again
+```
+
+Fix the row: a flaky row costs retries and, in a build, model calls. The usual causes are shared state (a fixed port, a directory outside the row's `TMPDIR`, a database) and timing; see [Verification Rows Fail Only When Run Together](#verification-rows-fail-only-when-run-together). The unit is released from rotten, so its rows are checked again, by this run and by later ones, and a row that keeps flaking keeps being reported.
+
+## Nothing Re-ran After a Change
+
+Re-checks follow declared edges, so a change that re-ran nothing has one of these causes; early cutoff is not a fault, and a waiting re-check is only timing.
+
+- **Early cutoff.** A unit regenerated into byte-identical files changes no path, so nothing downstream is dirty. A spec edit that changes no code, or a protocol-only commit (claims, journals, ledgers), re-checks nothing. `vitrify check --all` lists every dirty unit as `<slug>: dirty U-###: <path> (unit <slug> U-###)`; with none listed, nothing is due.
+- **An undeclared dependency.** A unit is re-checked only when a path owned by itself, or by something in its dependency closure, changed. A unit that uses another unit's or another SDD's code without naming it in `depends_on` is neither waited for nor re-checked when that code changes. Compare `vitrify locate --graph --json` with what the code imports. The boundary checker the spec should pin fails the gate of the unit that adds an undeclared import ([Author a Spec](../user-guides/author-a-spec.md#keep-the-declarations-complete-and-enforced)). The §5 Test command is the backstop that runs at every gate and catches some coupling the declarations miss; an SDD without one re-runs every row at every gate.
+- **A re-check that waits.** A dirty unit is re-checked only once nothing it depends on has work pending — unfinished, in flight, dirty, or rotten — so a re-check can come late in a run, after the upstream units land; a lane with a failing preflight re-checks nothing.
+- **A path `shared_inputs` leaves out.** A path outside every SDD's `scope_roots` re-checks every unit, unless the SDD lists its outside inputs in `shared_inputs`: then only the paths that list matches do. A file the commands read but the list omits re-checks nothing.
+
+To distrust every recorded check at once, run `vitrify run --recheck`: every Verified unit's rows and every SDD's §5 Test command run again. It regenerates nothing. When something re-ran that should not have, `vitrify check` names the changed paths that made each unit dirty, and a unit whose anchor cannot be resolved reads `anchor <commit> cannot be resolved (rewritten history, or a shallow clone)`.
+
+## Lane Checkouts Use Too Much Disk
+
+Every active lane has its own integration checkout under `run.worktree_dir` (`mainline-<slug>`, beside a base checkout and a culprit-probe checkout for the SDD), made anew when the lane first builds or re-checks in a run and reset before every gate, so a repository of many SDDs holds many checkouts at once, each with its own Bootstrap and Build output. Set `run.lane_cap` (in `~/.vitrify/config.toml`, in the repository's `.vitrify/config.toml`, or with `VITRIFY_RUN_LANE_CAP`) to bound how many lanes hold checkouts at once. Lanes are admitted by priority and the rest wait for a slot; a lane with nothing left to do removes its checkouts, giving its slot to the next; `0`, the default, is no limit. Anything a command keeps inside the checkout is removed with it, so keep tool caches outside the checkout, as package managers do by default. See [Configuration](../cli/configuration.md).
 
 ## A Run Was Killed
 

@@ -3,7 +3,7 @@
 
 use vitrify_core::model::UtcTime;
 
-use super::snapshot::{GateView, RunState, Snapshot, WorkerView};
+use super::snapshot::{GateView, LaneView, RunState, Snapshot, WorkerView};
 use crate::out::J;
 
 /// The human view, one line per element.
@@ -32,13 +32,18 @@ pub fn human(s: &Snapshot) -> Vec<String> {
         header.push_str(&format!(" · {}", s.harness));
     }
     out.push(header);
-    out.push(match &s.progress {
-        Some(p) => p.clone(),
-        None => format!(
-            "Progress: ? ({} could not be read in the primary checkout)",
-            s.sdd
-        ),
-    });
+    if s.lanes.len() > 1 {
+        out.push(String::new());
+        out.extend(lane_table(&s.lanes));
+    } else {
+        out.push(match &s.progress {
+            Some(p) => p.clone(),
+            None => format!(
+                "Progress: ? ({} could not be read in the primary checkout)",
+                s.sdd
+            ),
+        });
+    }
 
     out.push(String::new());
     let active: Vec<(usize, &WorkerView)> = s
@@ -170,6 +175,55 @@ pub fn human(s: &Snapshot) -> Vec<String> {
     out
 }
 
+/// A lane's progress: `3/8 Verified · 2 in flight · 3 waiting`, a zero
+/// count left out after the first; `?` when the counts could not be read.
+fn lane_progress(l: &LaneView) -> String {
+    let (Some(verified), Some(total), Some(waiting)) = (l.verified, l.total, l.waiting) else {
+        return "?".to_string();
+    };
+    let mut parts = vec![format!("{verified}/{total} Verified")];
+    if l.in_flight > 0 {
+        parts.push(format!("{} in flight", l.in_flight));
+    }
+    if waiting > 0 {
+        parts.push(format!("{waiting} waiting"));
+    }
+    parts.join(" · ")
+}
+
+/// At most this many of the units a lane waits on are named in the table;
+/// `--json` lists them all.
+const MAX_WAITS_ON: usize = 3;
+
+/// The lanes of a project run, one line each: slug, state, progress, and
+/// what an idle or blocked lane waits on.
+fn lane_table(lanes: &[LaneView]) -> Vec<String> {
+    let mut rows = vec![
+        ["LANE", "STATE", "PROGRESS", "WAITS ON"]
+            .map(str::to_string)
+            .to_vec(),
+    ];
+    for l in lanes {
+        let mut waits = l
+            .waits_on
+            .iter()
+            .take(MAX_WAITS_ON)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if l.waits_on.len() > MAX_WAITS_ON {
+            waits.push_str(&format!(" +{} more", l.waits_on.len() - MAX_WAITS_ON));
+        }
+        rows.push(vec![
+            l.slug.clone(),
+            l.state.clone(),
+            lane_progress(l),
+            waits,
+        ]);
+    }
+    table(&rows)
+}
+
 /// The Finished section shows only the latest attempts; `--json` has them
 /// all.
 const MAX_FINISHED: usize = 20;
@@ -283,6 +337,7 @@ pub fn json(s: &Snapshot) -> J {
             ("detail".into(), J::s(t.detail.clone())),
         ])
     });
+    let lanes = s.lanes.iter().map(lane_json).collect();
     J::Obj(vec![
         ("job_id".into(), J::s(s.job_id.clone())),
         ("pid".into(), J::Int(s.pid as i64)),
@@ -318,6 +373,25 @@ pub fn json(s: &Snapshot) -> J {
             J::Arr(s.warnings.iter().map(|w| J::s(w.clone())).collect()),
         ),
         ("logs".into(), J::s(s.logs.clone())),
+        ("lanes".into(), J::Arr(lanes)),
+    ])
+}
+
+/// One lane of the `lanes` array.
+fn lane_json(l: &LaneView) -> J {
+    let opt = |v: Option<u64>| v.map_or(J::Null, |n| J::Int(n as i64));
+    J::Obj(vec![
+        ("slug".into(), J::s(l.slug.clone())),
+        ("root".into(), J::s(l.root.clone())),
+        ("state".into(), J::s(l.state.clone())),
+        ("verified".into(), opt(l.verified)),
+        ("total".into(), opt(l.total)),
+        ("in_flight".into(), J::Int(l.in_flight as i64)),
+        ("waiting".into(), opt(l.waiting)),
+        (
+            "waits_on".into(),
+            J::Arr(l.waits_on.iter().map(|w| J::s(w.clone())).collect()),
+        ),
     ])
 }
 
@@ -478,6 +552,16 @@ mod view_tests {
                 worker_timeout_minutes: 45,
             },
             workers: vec![w, done],
+            lanes: vec![LaneView {
+                slug: "calc".to_string(),
+                root: "specs/calc".to_string(),
+                state: "build".to_string(),
+                verified: Some(1),
+                total: Some(2),
+                in_flight: 1,
+                waiting: Some(0),
+                waits_on: Vec::new(),
+            }],
             gate: Some(GateView {
                 step: "rows".to_string(),
                 since: UtcTime::parse("2026-11-16T14:09:00Z"),
@@ -528,7 +612,24 @@ mod view_tests {
                 "workers",
                 "gate",
                 "warnings",
-                "logs"
+                "logs",
+                "lanes"
+            ]
+        );
+        let J::Arr(lanes) = field(&j, "lanes") else {
+            panic!("lanes is not an array")
+        };
+        assert_eq!(
+            keys(&lanes[0]),
+            [
+                "slug",
+                "root",
+                "state",
+                "verified",
+                "total",
+                "in_flight",
+                "waiting",
+                "waits_on"
             ]
         );
         assert_eq!(
@@ -609,6 +710,51 @@ mod view_tests {
         assert_eq!(
             field(&json(&s), "report"),
             &J::Arr(report.into_iter().map(J::s).collect())
+        );
+    }
+
+    fn lane(slug: &str, state: &str, counts: Option<(u64, u64)>, in_flight: u64) -> LaneView {
+        LaneView {
+            slug: slug.to_string(),
+            root: format!("specs/{slug}"),
+            state: state.to_string(),
+            verified: counts.map(|c| c.0),
+            total: counts.map(|c| c.1),
+            in_flight,
+            waiting: counts.map(|(v, t)| t - v - in_flight),
+            waits_on: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn several_lanes_show_a_table_in_place_of_the_progress_line() {
+        let mut s = snap();
+        s.progress = None;
+        let mut web = lane("web", "idle", Some((0, 4)), 0);
+        web.waits_on = ["api U-007", "core U-002", "core U-003", "core U-004"]
+            .map(str::to_string)
+            .to_vec();
+        s.lanes = vec![
+            lane("api", "build", Some((3, 8)), 2),
+            lane("core", "complete", Some((12, 12)), 0),
+            web,
+            lane("docs", "up to date", None, 0),
+        ];
+        let lines = human(&s);
+        assert!(
+            lines.iter().all(|l| !l.starts_with("Progress:")),
+            "{lines:?}"
+        );
+        let at = lines.iter().position(|l| l.starts_with("LANE")).unwrap();
+        assert_eq!(
+            lines[at..at + 5],
+            [
+                "LANE  STATE       PROGRESS                                WAITS ON",
+                "api   build       3/8 Verified · 2 in flight · 3 waiting",
+                "core  complete    12/12 Verified",
+                "web   idle        0/4 Verified · 4 waiting                api U-007, core U-002, core U-003 +1 more",
+                "docs  up to date  ?",
+            ]
         );
     }
 

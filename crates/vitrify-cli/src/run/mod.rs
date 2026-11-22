@@ -3,13 +3,29 @@
 //! is Rust; inference happens only at the three enumerated points: workers,
 //! escalation, and plan-time authoring (outside `run`).
 //! Resume = re-derivation from repo state, never memory.
+//!
+//! A run builds its SDDs as lanes, one per SDD ([`lane`]), under one
+//! scheduler ([`sched`]). A plain `vitrify run` in a repository of several
+//! SDDs is a **project run**: every Active SDD is a lane (`--sdd` with
+//! `--upstream`: that SDD and those it depends on). One SDD — the only one,
+//! or the one `--sdd` names — is built exactly as it always was. What the lanes share is the run's: the worker
+//! cap, the gate pool, the event log, the run record. Preflight has three
+//! parts: the project's (before anything runs), each lane's static checks
+//! (at the start), and each lane's dynamic checks (its §5 commands in its
+//! own checkout, before its first build, then a re-check of the units a
+//! change reached since their last recorded check — and only those).
 
 pub mod escalate;
 pub mod events;
+pub mod history;
 pub mod integrate;
+mod lane;
 pub mod lease;
 pub mod mainline;
+mod plan;
+pub mod pool;
 pub mod progress;
+pub mod project;
 pub mod retry;
 mod sched;
 pub mod worker;
@@ -22,13 +38,17 @@ use vitrify_core::model::{self, Instance, Shape, UtcTime};
 use vitrify_core::{CoreError, audit};
 
 use crate::cmd;
-use crate::gate::MemoRunner;
+use crate::gate::{self, ShRunner};
 use crate::git::{Git, resolve_mainline, use_push};
 use crate::home;
+use crate::incremental::dirty::{Cascade, Mode, Snapshot};
+use crate::incremental::recheck;
 use crate::layout::{self, Layout};
 use crate::out::{J, diag, emit};
 use crate::signals;
+use integrate::RottenRow;
 use mainline::Mainline;
+use pool::Pool;
 
 pub struct RunFlags {
     pub dry_run: bool,
@@ -40,13 +60,30 @@ pub struct RunFlags {
     /// Stay alive when only blocked units remain, and resume when the spec
     /// changes.
     pub wait: bool,
+    /// Trust no recorded check: every Verified unit's rows and the §5 Test
+    /// command run again. Nothing is rebuilt for it, and built attempts are
+    /// still adopted — they pass the full gate either way.
+    pub recheck: bool,
+    /// With `sdd`: build the SDDs it depends on too, each a lane.
+    pub upstream: bool,
 }
 
+/// What every lane of a run shares: the repository, the configuration, the
+/// harness, the caps, the job.
 pub(crate) struct Ctx {
-    /// Repository, SDD (pinned in preflight), mainline branch, publish mode.
-    pub ml: Mainline,
+    /// The primary checkout.
+    pub primary: Git,
+    pub layout: Layout,
+    /// The mainline branch.
+    pub branch: String,
+    /// Publish by `git push` (origin arbitrates) rather than a local CAS.
+    pub push: bool,
     pub cfg: Config,
+    /// Model sessions at once, across every lane.
     pub cap: usize,
+    /// Commands at once — §5 commands and Verification rows — across every
+    /// gate, head check and preflight of the run.
+    pub gate_pool: &'static Pool,
     pub home: PathBuf,
     pub harness: String,
     /// The headless spelling the probe recorded for the selected harness.
@@ -65,13 +102,54 @@ pub(crate) struct Ctx {
     pub profile_error: Option<String>,
     pub sdd_arg: Option<String>,
     pub job_id: String,
+    /// `.vitrify/logs/<job>/`: the job's own records.
     pub logs_dir: PathBuf,
     pub wait: bool,
-    /// The SDD's name in branch and worktree names.
-    pub slug: String,
-    /// The mainline commit preflight's full audit ran clean on, when the
-    /// primary checkout held exactly that commit.
-    pub audited_at: Option<String>,
+    /// `--recheck`: no recorded check is trusted; preflight re-checks every
+    /// Verified unit and the §5 Test command.
+    pub recheck: bool,
+    /// `--upstream`.
+    pub upstream: bool,
+    /// A project run: lanes are named on every line, the header, report and
+    /// preflight are the project's, and a lane whose preflight fails is
+    /// blocked instead of refusing the run.
+    pub project: bool,
+}
+
+impl Ctx {
+    /// The mainline handle of a lane: the SDD at `sdd_rel`, named `slug`,
+    /// in this run's repository.
+    pub fn mainline_for(&self, sdd_rel: PathBuf, slug: String) -> Mainline {
+        Mainline {
+            primary: self.primary.clone(),
+            layout: self.layout.clone(),
+            sdd_rel,
+            slug,
+            branch: self.branch.clone(),
+            push: self.push,
+        }
+    }
+}
+
+/// One lane as preflight leaves it, for the scheduler to start.
+pub(crate) struct LaneSeed {
+    /// The SDD, pinned: its path, its slug, the repository it is built in.
+    pub ml: Mainline,
+    /// The SDD as the primary checkout held it at preflight.
+    pub inst: Instance,
+    /// Workers at once in this lane: 1 for a single-file SDD, whose every
+    /// status edit shares one file.
+    pub cap: usize,
+    /// Rows the preflight re-check found failing: their units are rotten
+    /// from the start.
+    pub rotten: Vec<RottenRow>,
+    /// Why its preflight failed, in a project run: the lane is blocked, and
+    /// so is every unit that depends on its units.
+    pub blocked: Vec<String>,
+    /// Units the preflight re-check checked, and whether it ran the §5 Test
+    /// command: under `--recheck` they need no second check.
+    pub checked: Vec<String>,
+    pub suite_ran: bool,
 }
 
 pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -137,17 +215,17 @@ pub fn run(flags: RunFlags) -> Result<u8, CoreError> {
         now.format().replace(['-', ':'], ""),
         std::process::id()
     );
-    let logs_dir = layout.scratch.join("logs").join(&job_id);
+    let logs_dir = layout.job_logs(&job_id);
+    // one bound on the commands the run starts, whichever lane starts them
+    let gate_pool = gate::install_pool(cfg.run.rows_at_once());
 
     let mut ctx = Ctx {
-        ml: Mainline {
-            primary,
-            layout,
-            sdd_rel: PathBuf::new(),
-            branch: mainline,
-            push,
-        },
+        primary,
+        layout,
+        branch: mainline,
+        push,
         cap: flags.cap.unwrap_or(cfg.run.worker_cap).max(1) as usize,
+        gate_pool,
         cfg,
         home,
         harness,
@@ -161,8 +239,9 @@ pub fn run(flags: RunFlags) -> Result<u8, CoreError> {
         job_id,
         logs_dir,
         wait: flags.wait,
-        slug: String::new(),
-        audited_at: None,
+        recheck: flags.recheck,
+        upstream: flags.upstream,
+        project: false,
     };
 
     // From here an interrupt is ours to handle: the commands preflight runs
@@ -175,10 +254,10 @@ pub fn run(flags: RunFlags) -> Result<u8, CoreError> {
     // mainline: it catches up before preflight reads it (a dry run only
     // says so).
     let behind = if flags.dry_run {
-        crate::cmd::claim::behind_note(&ctx.ml.primary, &ctx.ml.branch)
+        crate::cmd::claim::behind_note(&ctx.primary, &ctx.branch)
     } else {
         let _turn = crate::cmd::claim::tx_lock();
-        crate::cmd::claim::catch_up_primary(&ctx.ml.primary, &ctx.ml.branch)
+        crate::cmd::claim::catch_up_primary(&ctx.primary, &ctx.branch)
     };
     if let Some(note) = behind {
         diag(&note);
@@ -186,7 +265,7 @@ pub fn run(flags: RunFlags) -> Result<u8, CoreError> {
 
     // ---------------- preflight: refuse to start on any failure
     let mut failures: Vec<String> = Vec::new();
-    let inst = preflight(&mut ctx, &mut failures, flags.dry_run)?;
+    let lanes = preflight(&mut ctx, &mut failures, flags.dry_run)?;
     if let Some(sig) = signals::pending() {
         diag(&format!(
             "interrupted ({}) during preflight",
@@ -194,28 +273,68 @@ pub fn run(flags: RunFlags) -> Result<u8, CoreError> {
         ));
         signals::die_by(sig);
     }
-    let inst = match inst {
-        Some(inst) => inst,
-        None => {
+    let lanes = match lanes {
+        Ok(lanes) => lanes,
+        Err(code) => {
             for fail in &failures {
                 diag(&format!("preflight failed: {fail}"));
             }
-            return Ok(2);
+            return Ok(code);
         }
     };
 
     // ---------------- job header BEFORE dispatch
-    print_header(&ctx, &inst, !flags.dry_run);
-    if flags.dry_run {
-        for line in sched::dead_run_notes(&ctx, &inst) {
+    // A dry run records no job: its plan names none, so the same repository
+    // state and configuration print the same plan.
+    let plan = plan::build(
+        &ctx,
+        &lanes,
+        if flags.dry_run {
+            "dry-run"
+        } else {
+            &ctx.job_id
+        },
+    );
+    if ctx.project {
+        let lines = if flags.dry_run {
+            project::dry_run(&plan)
+        } else {
+            project::header(&plan, true)
+        };
+        for line in lines {
             emit(&line);
+        }
+    } else {
+        for lane in &lanes {
+            print_header(&ctx, lane, !flags.dry_run);
+        }
+    }
+    if flags.dry_run {
+        for lane in &lanes {
+            for line in lane::dead_run_notes(&ctx, &lane.inst) {
+                emit(&line);
+            }
+        }
+        let blocked: Vec<&str> = lanes
+            .iter()
+            .filter(|l| !l.blocked.is_empty())
+            .map(|l| l.ml.slug.as_str())
+            .collect();
+        if !blocked.is_empty() {
+            // the run would end Blocked: say so, and exit as it would
+            emit(&format!(
+                "dry-run: preflight failed for {} — the run would end Blocked (stderr says why)",
+                blocked.join(", ")
+            ));
+            emit(&format!("Start: {}", start_command(&flags)));
+            return Ok(2);
         }
         emit("dry-run: preflight green; stopping before dispatch");
         emit(&format!("Start: {}", start_command(&flags)));
         return Ok(0);
     }
 
-    sched::orchestrate(ctx)
+    sched::orchestrate(ctx, lanes, plan)
 }
 
 /// The command that starts the run a dry run checked: the flags given,
@@ -231,8 +350,14 @@ fn start_command(flags: &RunFlags) -> String {
     if flags.wait {
         words.push("--wait".to_string());
     }
+    if flags.recheck {
+        words.push("--recheck".to_string());
+    }
     if let Some(sdd) = &flags.sdd {
         words.extend(["--sdd".to_string(), shell_word(sdd)]);
+    }
+    if flags.upstream {
+        words.push("--upstream".to_string());
     }
     if let Some(branch) = &flags.mainline {
         words.extend(["--mainline".to_string(), shell_word(branch)]);
@@ -299,12 +424,196 @@ fn select_harness(home: &Path, cfg: &Config) -> (Option<String>, Option<Vec<Stri
     (None, None)
 }
 
+// ---------------------------------------------------------------- preflight
+
+/// Preflight: which SDDs the run builds, the project's checks, then each
+/// lane's static checks, then each lane's dynamic checks. Every failure
+/// found is collected. With one lane any failure refuses the run; in a
+/// project run a lane whose own checks fail is blocked, and the rest go on.
+/// `Err(code)` = refused (or interrupted).
 fn preflight(
     ctx: &mut Ctx,
     failures: &mut Vec<String>,
     dry_run: bool,
-) -> Result<Option<Instance>, CoreError> {
-    let root = ctx.ml.primary.dir.clone();
+) -> Result<Result<Vec<LaneSeed>, u8>, CoreError> {
+    let chosen = match choose_lanes(ctx, failures)? {
+        Ok(chosen) => chosen,
+        Err(code) => return Ok(Err(code)),
+    };
+    let mut lanes: Vec<LaneSeed> = chosen
+        .into_iter()
+        .map(|(sdd_rel, inst)| {
+            let slug = layout::sdd_slug(&inst);
+            LaneSeed {
+                ml: ctx.mainline_for(sdd_rel, slug),
+                inst,
+                cap: usize::MAX,
+                rotten: Vec::new(),
+                blocked: Vec::new(),
+                checked: Vec::new(),
+                suite_ran: false,
+            }
+        })
+        .collect();
+
+    let usable_root = project_preflight(ctx, &lanes, failures);
+    if ctx.project {
+        if !failures.is_empty() {
+            return Ok(Err(2));
+        }
+        for lane in &mut lanes {
+            let mut own: Vec<String> = Vec::new();
+            if !lane_static(ctx, lane, &mut own, dry_run)? {
+                return Ok(Err(2));
+            }
+            // A lane's dynamic preflight runs at its first build or
+            // re-check, when the scheduler admits it, and its re-checks in
+            // the loop, in dependency order. A dry run has no loop: it runs
+            // them here, one lane at a time, and keeps no checkout beyond
+            // `run.lane_cap`.
+            if dry_run && own.is_empty() && usable_root {
+                if !lane_dynamic(ctx, lane, &mut own, dry_run, false)? {
+                    return Ok(Err(2));
+                }
+                if ctx.cfg.run.lane_limit().is_some() {
+                    lane.ml.remove_checkouts();
+                }
+            }
+            for f in &own {
+                diag(&project::event_line(
+                    &lane.ml.slug,
+                    &format!("preflight failed: {f}"),
+                ));
+            }
+            lane.blocked = own;
+        }
+    } else {
+        for lane in &lanes {
+            if !lane_static(ctx, lane, failures, dry_run)? {
+                return Ok(Err(2));
+            }
+        }
+        // a lane's commands run in its own checkout, made under the
+        // worktree root: without a usable root there is nowhere to run them
+        if usable_root {
+            for lane in &mut lanes {
+                if !lane_dynamic(ctx, lane, failures, dry_run, true)? {
+                    return Ok(Err(2));
+                }
+            }
+        }
+    }
+
+    for lane in &mut lanes {
+        // single-file shape forces cap 1
+        if lane.inst.shape == Shape::Single {
+            lane.cap = 1;
+            if ctx.cap > 1 && !ctx.project {
+                diag(
+                    "note: single-file SDD — worker cap forced to 1 (every status edit shares one file)",
+                );
+            }
+        }
+    }
+    // the run never starts more workers than its lanes can take
+    let room = lanes.iter().fold(0usize, |n, l| n.saturating_add(l.cap));
+    ctx.cap = ctx.cap.min(room).max(1);
+
+    if failures.is_empty() {
+        Ok(Ok(lanes))
+    } else {
+        Ok(Err(2))
+    }
+}
+
+/// Which SDDs the run builds, each pinned as its path under the repository
+/// root and loaded from the primary checkout: `--sdd`'s, or the only one;
+/// in a repository of several, every Active SDD — a project run, refused
+/// (exit 4 or 2) when the repository as a whole does not hold together;
+/// `--sdd` with `--upstream`: that SDD and the SDDs it depends on.
+fn choose_lanes(
+    ctx: &mut Ctx,
+    failures: &mut Vec<String>,
+) -> Result<Result<Vec<(PathBuf, Instance)>, u8>, CoreError> {
+    let root = ctx.primary.dir.clone();
+    if ctx.upstream && ctx.sdd_arg.is_none() {
+        failures.push(with_fix(
+            "--upstream adds the SDDs an SDD depends on, and names none",
+            "pass --sdd <root> with it",
+        ));
+        return Ok(Err(2));
+    }
+    let project_wide = ctx.sdd_arg.is_none() && cmd::discover(&root).len() > 1;
+    if !project_wide && !ctx.upstream {
+        return Ok(match resolve_lane(ctx, failures)? {
+            Some(lane) => Ok(vec![lane]),
+            None => Err(2),
+        });
+    }
+    let named = if ctx.upstream {
+        match resolve_lane(ctx, failures)? {
+            Some(lane) => Some(lane),
+            None => return Ok(Err(2)),
+        }
+    } else {
+        None
+    };
+
+    // the repository as a whole
+    let (all, refused) = cmd::loaded(&root, named.as_ref().map(|(_, i)| i));
+    for (_, e) in &refused {
+        failures.push(sdd_failure(&e.to_string()));
+    }
+    if !failures.is_empty() {
+        return Ok(Err(2));
+    }
+    let graph = match project::preflight(&all) {
+        Ok(graph) => graph,
+        Err(refused) => {
+            failures.extend(refused.failures);
+            return Ok(Err(refused.code));
+        }
+    };
+    let active = |i: &Instance| i.meta.get_str_or("status", "Draft") == "Active";
+    let mut chosen: Vec<&Instance> = match &named {
+        Some((_, inst)) => {
+            let slugs = project::select_lanes(&graph, vitrify_core::graph::slug_of(inst), true)
+                .unwrap_or_default();
+            all.iter()
+                .filter(|i| {
+                    i.root == inst.root
+                        || (active(i) && slugs.iter().any(|s| s == vitrify_core::graph::slug_of(i)))
+                })
+                .collect()
+        }
+        None => all.iter().filter(|i| active(i)).collect(),
+    };
+    if chosen.is_empty() {
+        failures.push(with_fix(
+            "no SDD of the repository is Active",
+            "finish authoring one and set it Active: vitrify brief authoring",
+        ));
+        return Ok(Err(2));
+    }
+    chosen.sort_by(|a, b| vitrify_core::graph::slug_of(a).cmp(vitrify_core::graph::slug_of(b)));
+    ctx.project = project_wide || chosen.len() > 1;
+    Ok(Ok(chosen
+        .into_iter()
+        .map(|i| {
+            let rel = cmd::sdd_rel(&root, &i.root).unwrap_or_else(|| i.root.clone());
+            (rel, i.clone())
+        })
+        .collect()))
+}
+
+/// The SDD the run builds — `--sdd`, else the only one — pinned as its path
+/// under the repository root and loaded from the primary checkout. `None`
+/// (with the failure recorded) when there is no such SDD.
+fn resolve_lane(
+    ctx: &Ctx,
+    failures: &mut Vec<String>,
+) -> Result<Option<(PathBuf, Instance)>, CoreError> {
+    let root = ctx.primary.dir.clone();
     // SDD located. `--sdd` is a path from where the verb runs, which may be
     // a linked worktree: what it names there is found by its path under that
     // checkout's root. Without it, the primary checkout is searched.
@@ -341,182 +650,59 @@ fn preflight(
         }
     };
     // preflight judges the primary checkout's copy
-    let inst = match cmd::resolve_sdd_in(&root, &sdd_rel).and_then(Instance::load) {
-        Ok(inst) => inst,
+    match cmd::resolve_sdd_in(&root, &sdd_rel).and_then(Instance::load) {
+        Ok(inst) => Ok(Some((sdd_rel, inst))),
         Err(e) => {
             failures.push(sdd_failure(&e.to_string()));
-            return Ok(None);
+            Ok(None)
         }
-    };
-    ctx.ml.sdd_rel = sdd_rel;
-    ctx.slug = layout::sdd_slug(&inst);
+    }
+}
 
-    let sdd_word = shell_word(&cmd::sdd_arg(&ctx.ml.sdd_rel));
-    if inst.meta.get_str_or("status", "Draft") != "Active" {
-        failures.push(with_fix(
-            &format!(
-                "SDD status is {}, not Active",
-                inst.meta.get_str_or("status", "Draft")
-            ),
-            "finish authoring and set it Active: vitrify brief authoring",
-        ));
-    }
-    // committed at the mainline head: spec paths clean in the primary
-    let porcelain = ctx.ml.primary.status_porcelain().map_err(CoreError::from)?;
-    let spec_rel = cmd::sdd_arg(&ctx.ml.sdd_rel);
-    let under_spec =
-        |p: &str| spec_rel == "." || p == spec_rel || p.starts_with(&format!("{spec_rel}/"));
-    let dirty_spec: Vec<&str> = porcelain
-        .lines()
-        .filter(|l| l.split_whitespace().nth(1).is_some_and(under_spec))
-        .collect();
-    if !dirty_spec.is_empty() {
-        if crate::cmd::claim::behind_note(&ctx.ml.primary, &ctx.ml.branch).is_some() {
-            // not the user's edits: the checkout holds an earlier commit
-            failures.push(with_fix(
-                &format!(
-                    "the primary checkout is behind {} — its copy of the SDD is not the one at the mainline head",
-                    ctx.ml.branch
-                ),
-                "bring it up to date as the note above says",
-            ));
-        } else {
-            failures.push(with_fix(
-                &format!(
-                    "SDD not committed at the mainline head (uncommitted spec changes): {}",
-                    dirty_spec.join("; ")
-                ),
-                &format!("commit or stash the changes under {sdd_word}"),
-            ));
-        }
-    }
+/// The project's preflight, before anything runs: the local mainline not
+/// ahead of origin, each lane's slug its SDD's alone, a harness recorded,
+/// the worktree root usable. Returns whether the worktree root is usable.
+fn project_preflight(ctx: &Ctx, lanes: &[LaneSeed], failures: &mut Vec<String>) -> bool {
     // origin arbitrates: the run builds origin's head, not the local
     // branch's. Commits the local branch holds and origin does not would be
     // read here (the SDD, its version, its staleness marks) and then left
     // out of everything the run builds and reports on.
-    if ctx.ml.push {
-        let _ = ctx.ml.primary.fetch_origin(&ctx.ml.branch);
-        let local = ctx
-            .ml
-            .primary
-            .rev_parse(&format!("refs/heads/{}", ctx.ml.branch));
+    if ctx.push {
+        let _ = ctx.primary.fetch_origin(&ctx.branch);
+        let local = ctx.primary.rev_parse(&format!("refs/heads/{}", ctx.branch));
         let remote = ctx
-            .ml
             .primary
-            .rev_parse(&format!("refs/remotes/origin/{}", ctx.ml.branch));
+            .rev_parse(&format!("refs/remotes/origin/{}", ctx.branch));
         if let (Ok(local), Ok(remote)) = (local, remote)
             && local != remote
-            && !ctx.ml.primary.is_ancestor(&local, &remote).unwrap_or(false)
+            && !ctx.primary.is_ancestor(&local, &remote).unwrap_or(false)
         {
             failures.push(with_fix(
                 &format!(
                     "the local {b} holds commits origin/{b} does not — the run builds origin's head, so they would be left out",
-                    b = ctx.ml.branch
+                    b = ctx.branch
                 ),
-                &format!("publish them first: git push origin {}", shell_word(&ctx.ml.branch)),
+                &format!("publish them first: git push origin {}", shell_word(&ctx.branch)),
             ));
         }
     }
-    // branch and worktree names carry the slug: it must be this SDD's alone
-    for other in cmd::discover(&root) {
-        if other.root != inst.root
-            && layout::slug_of(&other.meta, &other.root, other.shape) == ctx.slug
-        {
-            failures.push(with_fix(
-                &format!(
-                    "SDD slug `{}` is also used by {} — branch and worktree names would collide",
-                    ctx.slug,
-                    other.root.display()
-                ),
-                "rename one of the `sdd:` slugs",
-            ));
-        }
-    }
-
-    // lint (the resume-tolerant subset; built state is journal-governed once
-    // the SDD is Active)
-    let lint_findings =
-        cmd::lint::pre_run_findings(&inst, &root, ctx.cfg.lint.readset_budget_bytes)?;
-    for x in &lint_findings {
-        failures.push(with_fix(
-            &format!("lint [{}] {}: {}", x.check, x.subject, x.cause),
-            &x.remediation,
-        ));
-    }
-
-    // audit clean — or only lapsed leases, fixed and published. Check 4
-    // re-runs every Verified unit's rows: each distinct command once,
-    // run.gate_jobs at a time.
-    let jobs = ctx.cfg.run.rows_at_once();
-    let runner = MemoRunner::for_verified(&inst, &root, jobs)?;
-    let (findings, _) = audit::run(
-        &inst,
-        &root,
-        &cmd::audit_options(audit::Options::default(), &root, &inst),
-        &runner,
-        UtcTime::now(),
-    )?;
-    if signals::interrupted() {
-        return Ok(None);
-    }
-    let audit_clean = findings.is_empty();
-    if !audit_clean {
-        if findings.iter().all(|f| f.check == 7) {
-            if dry_run {
-                // a dry run publishes nothing
-                diag(&format!(
-                    "preflight: {} lapsed lease(s) — a run releases them before it starts",
-                    findings.len()
-                ));
-            } else {
-                ctx.ml.heal(true, false)?;
-                diag(&format!(
-                    "preflight: {} lapsed lease(s) fixed and published",
-                    findings.len()
-                ));
-            }
-        } else {
-            for f in &findings {
+    // branch, worktree and checkout names carry the slug: it must be its
+    // SDD's alone
+    let others = cmd::discover(&ctx.primary.dir);
+    for lane in lanes {
+        for other in &others {
+            if other.root != lane.inst.root
+                && layout::slug_of(&other.meta, &other.root, other.shape) == lane.ml.slug
+            {
                 failures.push(with_fix(
-                    &format!("audit [check {}] {}: {}", f.check, f.subject, f.cause),
-                    &f.remediation,
+                    &format!(
+                        "SDD slug `{}` is also used by {} — branch and worktree names would collide",
+                        lane.ml.slug,
+                        other.root.display()
+                    ),
+                    "rename one of the `sdd:` slugs",
                 ));
             }
-        }
-    }
-
-    // §5 bootstrap, build and lint run clean at the head. The Test command
-    // does not gate the start: whether tests exist or pass before the build
-    // is the SDD's test posture (schema §10). From the first integration on
-    // it gates as a regression check.
-    let core_text = model::read_text(&inst.file)?;
-    let cmds = integrate::sdd_commands(&core_text);
-    for (name, cmd_opt) in [
-        ("bootstrap", &cmds.bootstrap),
-        ("build", &cmds.build),
-        ("lint", &cmds.lint),
-    ] {
-        match cmd_opt {
-            Some(c) => {
-                let (ok, output) = integrate::run_gate_command(c, &root);
-                if signals::interrupted() {
-                    return Ok(None);
-                }
-                if !ok {
-                    let quoted = tail(&output, 5);
-                    let cause = format!("§5 {name} command failed: {c}");
-                    let fix = "run it from the repository root and fix what it reports";
-                    failures.push(if quoted.is_empty() {
-                        with_fix(&cause, fix)
-                    } else {
-                        format!("{}\n{quoted}", with_fix(&cause, fix))
-                    });
-                }
-            }
-            None => failures.push(with_fix(
-                &format!("§5 Commands block missing the {name} command"),
-                &format!("add the {name} command to the SDD's §5 Commands"),
-            )),
         }
     }
 
@@ -535,35 +721,281 @@ fn preflight(
     }
 
     // the worktrees must be somewhere no ignore file of the repository covers
-    if let Err(e) = ctx.ml.layout.ensure_worktree_root(&ctx.ml.primary) {
+    match ctx.layout.ensure_worktree_root(&ctx.primary) {
+        Ok(()) => true,
+        Err(e) => {
+            failures.push(with_fix(
+                &e.to_string(),
+                "point run.worktree_dir at a directory no ignore file of the repository covers",
+            ));
+            false
+        }
+    }
+}
+
+/// A lane's static preflight, at the start of the run: its SDD Active and
+/// committed at the mainline head, lint clean, the audit clean (or only
+/// lapsed leases, which are fixed), the journal consistent with front
+/// matter (the audit replays it). The audit runs no Verification row: the
+/// dynamic preflight re-checks what a change reached. `false` =
+/// interrupted.
+fn lane_static(
+    ctx: &Ctx,
+    lane: &LaneSeed,
+    failures: &mut Vec<String>,
+    dry_run: bool,
+) -> Result<bool, CoreError> {
+    let root = &ctx.primary.dir;
+    let inst = &lane.inst;
+    let sdd_word = shell_word(&cmd::sdd_arg(&lane.ml.sdd_rel));
+    if inst.meta.get_str_or("status", "Draft") != "Active" {
         failures.push(with_fix(
-            &e.to_string(),
-            "point run.worktree_dir at a directory no ignore file of the repository covers",
+            &format!(
+                "SDD status is {}, not Active",
+                inst.meta.get_str_or("status", "Draft")
+            ),
+            "finish authoring and set it Active: vitrify brief authoring",
+        ));
+    }
+    // committed at the mainline head: spec paths clean in the primary
+    let porcelain = ctx.primary.status_porcelain().map_err(CoreError::from)?;
+    let spec_rel = cmd::sdd_arg(&lane.ml.sdd_rel);
+    let under_spec =
+        |p: &str| spec_rel == "." || p == spec_rel || p.starts_with(&format!("{spec_rel}/"));
+    let dirty_spec: Vec<&str> = porcelain
+        .lines()
+        .filter(|l| l.split_whitespace().nth(1).is_some_and(under_spec))
+        .collect();
+    if !dirty_spec.is_empty() {
+        if crate::cmd::claim::behind_note(&ctx.primary, &ctx.branch).is_some() {
+            // not the user's edits: the checkout holds an earlier commit
+            failures.push(with_fix(
+                &format!(
+                    "the primary checkout is behind {} — its copy of the SDD is not the one at the mainline head",
+                    ctx.branch
+                ),
+                "bring it up to date as the note above says",
+            ));
+        } else {
+            failures.push(with_fix(
+                &format!(
+                    "SDD not committed at the mainline head (uncommitted spec changes): {}",
+                    dirty_spec.join("; ")
+                ),
+                &format!("commit or stash the changes under {sdd_word}"),
+            ));
+        }
+    }
+
+    // lint (the resume-tolerant subset; built state is journal-governed once
+    // the SDD is Active)
+    let lint_findings = cmd::lint::pre_run_findings(inst, root, ctx.cfg.lint.readset_budget_bytes)?;
+    for x in &lint_findings {
+        failures.push(with_fix(
+            &format!("lint [{}] {}: {}", x.check, x.subject, x.cause),
+            &x.remediation,
         ));
     }
 
-    // single-file shape forces cap 1
-    if inst.shape == Shape::Single && ctx.cap > 1 {
-        diag("note: single-file SDD — worker cap forced to 1 (every status edit shares one file)");
-        ctx.cap = 1;
+    // audit clean — or only lapsed leases, fixed and published
+    let (findings, _) = audit::run(
+        inst,
+        root,
+        &cmd::audit_options(
+            audit::Options {
+                skip_rotten: true,
+                ..Default::default()
+            },
+            root,
+            inst,
+        ),
+        &ShRunner,
+        UtcTime::now(),
+    )?;
+    if signals::interrupted() {
+        return Ok(false);
     }
-
-    // What the audit just established holds for the mainline head only if
-    // the primary checkout is that commit, unmodified.
-    if audit_clean
-        && failures.is_empty()
-        && let Ok(head) = ctx.ml.head()
-        && ctx.ml.primary.rev_parse("HEAD").ok().as_deref() == Some(head.as_str())
-        && ctx.ml.primary.clean_against(&head).unwrap_or(false)
-    {
-        ctx.audited_at = Some(head);
+    let audit_clean = findings.is_empty();
+    if !audit_clean {
+        if findings.iter().all(|f| f.check == 7) {
+            if dry_run {
+                // a dry run publishes nothing
+                diag(&format!(
+                    "preflight: {} lapsed lease(s) — a run releases them before it starts",
+                    findings.len()
+                ));
+            } else {
+                lane.ml.heal(true, false)?;
+                diag(&format!(
+                    "preflight: {} lapsed lease(s) fixed and published",
+                    findings.len()
+                ));
+            }
+        } else {
+            for f in &findings {
+                failures.push(with_fix(
+                    &format!("audit [check {}] {}: {}", f.check, f.subject, f.cause),
+                    &f.remediation,
+                ));
+            }
+        }
     }
+    Ok(true)
+}
 
-    if failures.is_empty() {
-        Ok(Some(inst))
+/// A lane's dynamic preflight, before its first build: its integration
+/// checkout is made anew at the mainline head — whatever an earlier run
+/// left there is gone — and the §5 Bootstrap, Build and Lint commands run
+/// clean in it, never in the primary checkout. The Test command does not
+/// gate the start: whether tests exist or pass before the build is the
+/// SDD's test posture (schema §10). From the first integration on it gates
+/// as a regression check. Then the lane's re-check ([`lane_recheck`]).
+/// `false` = interrupted.
+fn lane_dynamic(
+    ctx: &Ctx,
+    lane: &mut LaneSeed,
+    failures: &mut Vec<String>,
+    dry_run: bool,
+    recheck: bool,
+) -> Result<bool, CoreError> {
+    let note = || {
+        diag(
+            "note: another vitrify process is integrating this SDD — waiting for its integration checkout",
+        )
+    };
+    let Some((checkout, head)) = dynamic_checks(&lane.ml, failures, &note)? else {
+        return Ok(false);
+    };
+    if !failures.is_empty() || !recheck {
+        return Ok(true);
+    }
+    lane_recheck(ctx, lane, &checkout, &head, dry_run)
+}
+
+/// A lane's §5 Bootstrap, Build and Lint, in its integration checkout made
+/// anew at the mainline head (under its lock: another run of the SDD may be
+/// gating there — `waiting` is called once if so). Each failure is added to
+/// `failures`. Returns the checkout and the head; `None` = interrupted.
+pub(crate) fn dynamic_checks(
+    ml: &Mainline,
+    failures: &mut Vec<String>,
+    waiting: &dyn Fn(),
+) -> Result<Option<(PathBuf, String)>, CoreError> {
+    let Some(_held) = ml.lock_checkout(waiting)? else {
+        return Ok(None);
+    };
+    let head = ml.head()?;
+    let checkout = ml.recreate_checkout(&head)?;
+    let inst = ml.sdd_in(&checkout)?;
+    let cmds = integrate::sdd_commands(&model::read_text(&inst.file)?);
+    let steps: [(&str, &Option<String>); 3] = [
+        ("bootstrap", &cmds.bootstrap),
+        ("build", &cmds.build),
+        ("lint", &cmds.lint),
+    ];
+    for (name, cmd_opt) in steps {
+        let Some(c) = cmd_opt else {
+            failures.push(with_fix(
+                &format!("§5 Commands block missing the {name} command"),
+                &format!("add the {name} command to the SDD's §5 Commands"),
+            ));
+            continue;
+        };
+        let (ok, output) = integrate::run_gate_command(c, &checkout);
+        if signals::interrupted() {
+            return Ok(None);
+        }
+        if !ok {
+            let quoted = tail(&output, 5);
+            let cause = format!("§5 {name} command failed: {c}");
+            let fix = "run it from the repository root and fix what it reports";
+            failures.push(if quoted.is_empty() {
+                with_fix(&cause, fix)
+            } else {
+                format!("{}\n{quoted}", with_fix(&cause, fix))
+            });
+        }
+    }
+    Ok(Some((checkout, head)))
+}
+
+/// The lane's re-check, in its checkout at `head`: the Verified units a
+/// change reached since their last recorded check (with `--recheck`, every
+/// one) run their rows, then the §5 Test command. Those that pass are
+/// recorded — fresh stamps and `verified` events by `recheck`, and
+/// `suite: "pass"` when the Test command passed — as one mainline commit
+/// (a dry run records nothing). A unit whose rows fail is rotten from the
+/// start. With nothing dirty, nothing runs. `false` = interrupted.
+fn lane_recheck(
+    ctx: &Ctx,
+    lane: &mut LaneSeed,
+    checkout: &Path,
+    head: &str,
+    dry_run: bool,
+) -> Result<bool, CoreError> {
+    let git = ctx.primary.at(checkout);
+    let slug = vitrify_core::graph::slug_of(&lane.inst).to_string();
+    let mode = if ctx.recheck {
+        Mode::Everything
     } else {
-        Ok(None)
+        Mode::Changes
+    };
+    let units: Vec<String> =
+        match Snapshot::load(&git, checkout, head).and_then(|snap| snap.dirty(&git, mode)) {
+            Ok(Cascade::Resolved(set)) => set.of_sdd(&slug).map(|d| d.node.unit.clone()).collect(),
+            // without a whole repository to cascade along, every Verified
+            // unit is checked
+            _ => lane
+                .inst
+                .units
+                .iter()
+                .filter(|u| u.meta.get_str_or("status", "Draft") == "Verified")
+                .map(|u| u.unit.clone())
+                .collect(),
+        };
+    if units.is_empty() {
+        return Ok(true);
     }
+    let report = recheck::run(
+        &git,
+        head,
+        &lane.ml.sdd_rel,
+        &units,
+        &integrate::PoolRunner(ctx.cfg.run.rows_at_once()),
+    )?;
+    if report.interrupted || signals::interrupted() {
+        return Ok(false);
+    }
+    if let Some(broken) = &report.broken {
+        diag(&format!(
+            "note: the re-check could not run: `{}` failed at {}",
+            broken.command,
+            &head[..head.len().min(7)]
+        ));
+        return Ok(true);
+    }
+    // what failed is rotten: something on mainline broke it, or it is flaky
+    lane.rotten
+        .extend(integrate::rotten_of(&lane.inst, &report)?);
+    lane.checked = report.units.iter().map(|u| u.unit.clone()).collect();
+    lane.suite_ran = report.suite.is_some();
+    let edits = report.edits();
+    if !edits.verified.is_empty() {
+        diag(&format!(
+            "preflight: re-checked {} at {}{}",
+            edits.verified.join(", "),
+            edits.commit,
+            if dry_run {
+                " (a dry run records nothing)"
+            } else {
+                ""
+            }
+        ));
+    }
+    if !dry_run {
+        integrate::record_recheck(&lane.ml, &edits);
+    }
+    Ok(true)
 }
 
 /// The last `n` lines of `text` that say something (blank lines skipped) —
@@ -574,9 +1006,11 @@ pub(crate) fn tail(text: &str, n: usize) -> String {
     lines[start..].join("\n")
 }
 
-/// The job header. `watch`: the run is starting, so the header ends with
-/// the command that watches it (a dry run starts nothing to watch).
-fn print_header(ctx: &Ctx, inst: &Instance, watch: bool) {
+/// The job header of one lane. `watch`: the run is starting, so the header
+/// ends with the command that watches it (a dry run starts nothing to
+/// watch).
+fn print_header(ctx: &Ctx, lane: &LaneSeed, watch: bool) {
+    let inst = &lane.inst;
     let slug = inst.meta.get_str_or("sdd", "?");
     let version = inst.meta.get_str_or("version", "?");
     emit(&format!(
@@ -592,8 +1026,8 @@ fn print_header(ctx: &Ctx, inst: &Instance, watch: bool) {
     ));
     emit(&format!(
         "Mainline: {}   Remote: {}   Shape: {}",
-        ctx.ml.branch,
-        if ctx.ml.push { "origin" } else { "none" },
+        ctx.branch,
+        if ctx.push { "origin" } else { "none" },
         inst.shape.as_str()
     ));
     emit(&format!("Plan: {}", plan(inst)));
@@ -612,13 +1046,13 @@ fn print_header(ctx: &Ctx, inst: &Instance, watch: bool) {
     }
     emit(&format!(
         "Worktrees: {}   Branches: sdd/{}/<unit>/c<seq>",
-        ctx.ml.layout.wt_root.display(),
-        ctx.slug
+        ctx.layout.wt_root.display(),
+        lane.ml.slug
     ));
     emit(&format!(
         "Parameters: worker cap {} · gate jobs {}{} · lease {}m · renew at {} remaining · escalate after {} failed attempts of a unit, set it aside after {}",
         ctx.cap,
-        ctx.cfg.run.rows_at_once(),
+        ctx.gate_pool.size(),
         if ctx.cfg.run.rows_follow_cores() {
             " (one per core)"
         } else {
@@ -667,6 +1101,9 @@ fn plan(inst: &Instance) -> String {
 
 /// One dispatched worker, as `run.json` shows it.
 pub(crate) struct WorkerRec {
+    /// The slug of the lane it works for: its logs are under
+    /// `.vitrify/logs/<job>/<lane>/`.
+    pub lane: String,
     pub holder: String,
     pub pid: u32,
     pub unit: String,
@@ -685,24 +1122,40 @@ pub(crate) struct WorkerRec {
     pub detail: Option<String>,
 }
 
+/// The run's record: what every lane did, in the order it happened.
 #[derive(Default)]
 pub(crate) struct RunState {
     pub workers: Vec<WorkerRec>,
     pub reports: Vec<String>,
     pub escalations: Vec<(String, String)>, // (evidence_path, verdict)
-    pub gate_failures: Vec<(String, String, String)>, // (unit, command, output)
-    pub attempts: Vec<(String, String, String)>, // (unit, final outcome label, detail)
     /// The final report's lines, from `Complete.` or `Blocked.` on; `None`
     /// until it is printed.
     pub report: Option<Vec<String>>,
 }
 
+/// Write `body` to `dir/name` whole (tmp + rename), so a reader never sees
+/// half a record.
+fn write_record(dir: &Path, name: &str, body: &str) -> Result<(), CoreError> {
+    std::fs::create_dir_all(dir).map_err(|source| CoreError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    let path = dir.join(name);
+    let tmp = dir.join(format!("{name}.tmp"));
+    std::fs::write(&tmp, body).map_err(|source| CoreError::Io {
+        path: tmp.clone(),
+        source,
+    })?;
+    std::fs::rename(&tmp, &path).map_err(|source| CoreError::Io { path, source })
+}
+
 /// Write the run record: `.vitrify/run.json` (the latest run in this
 /// repository) and a copy beside the job's logs. Written when the run
 /// starts and at every change, so a run that dies leaves its own record —
-/// including the workers it had running.
+/// including the workers it had running. `sdd` names what the run builds.
 pub(crate) fn write_run_json(
     ctx: &Ctx,
+    sdd: &str,
     state: &RunState,
     started_at: &str,
     terminated: Option<(&str, &str)>,
@@ -723,6 +1176,7 @@ pub(crate) fn write_run_json(
                 ("outcome".into(), J::s(w.outcome.clone())),
                 ("retry".into(), J::Bool(w.retry)),
                 ("detail".into(), J::opt_str(w.detail.clone())),
+                ("lane".into(), J::s(w.lane.clone())),
             ])
         })
         .collect();
@@ -739,7 +1193,7 @@ pub(crate) fn write_run_json(
     let mut pairs = vec![
         ("job_id".into(), J::s(ctx.job_id.clone())),
         ("pid".into(), J::Int(std::process::id() as i64)),
-        ("sdd".into(), J::s(cmd::sdd_arg(&ctx.ml.sdd_rel))),
+        ("sdd".into(), J::s(sdd)),
         ("harness".into(), J::s(ctx.harness.clone())),
         ("started_at".into(), J::s(started_at)),
         (
@@ -752,10 +1206,7 @@ pub(crate) fn write_run_json(
             "params".into(),
             J::Obj(vec![
                 ("cap".into(), J::Int(ctx.cap as i64)),
-                (
-                    "gate_jobs".into(),
-                    J::Int(ctx.cfg.run.rows_at_once() as i64),
-                ),
+                ("gate_jobs".into(), J::Int(ctx.gate_pool.size() as i64)),
                 ("lease_minutes".into(), J::Int(ctx.cfg.run.lease_minutes)),
                 (
                     "worker_timeout_minutes".into(),
@@ -769,7 +1220,7 @@ pub(crate) fn write_run_json(
         ),
         (
             "worktrees".into(),
-            J::s(ctx.ml.layout.wt_root.display().to_string()),
+            J::s(ctx.layout.wt_root.display().to_string()),
         ),
         ("workers".into(), J::Arr(workers)),
         (
@@ -795,19 +1246,9 @@ pub(crate) fn write_run_json(
         }),
     ));
     let body = J::Obj(pairs).dumps_indent2();
-    ctx.ml.layout.ensure_scratch()?;
-    for dir in [ctx.ml.layout.scratch.clone(), ctx.logs_dir.clone()] {
-        std::fs::create_dir_all(&dir).map_err(|source| CoreError::Io {
-            path: dir.clone(),
-            source,
-        })?;
-        let path = dir.join("run.json");
-        let tmp = dir.join("run.json.tmp");
-        std::fs::write(&tmp, &body).map_err(|source| CoreError::Io {
-            path: tmp.clone(),
-            source,
-        })?;
-        std::fs::rename(&tmp, &path).map_err(|source| CoreError::Io { path, source })?;
+    ctx.layout.ensure_scratch()?;
+    for dir in [&ctx.layout.scratch, &ctx.logs_dir] {
+        write_record(dir, "run.json", &body)?;
     }
     Ok(())
 }

@@ -1,7 +1,10 @@
 //! `vitrify check` — every read-only check over the seeded drift fixtures:
 //! each finding surfaces under its source with its remediation, open
 //! questions are notes, nothing is written, and the exit code is the worst
-//! of the components.
+//! of the components. In a git repository it also lists the dirty units:
+//! Verified units a committed change reached, with the paths that did it.
+
+mod common;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -125,7 +128,8 @@ fn clean_calc_is_one_clean_sdd() {
             "root": "specs/calc",
             "clean": true,
             "findings": [],
-            "notes": []
+            "notes": [],
+            "dirty": []
         })
     );
 }
@@ -375,6 +379,72 @@ fn open_questions_are_notes_not_findings() {
         v["notes"],
         serde_json::json!(["Q-007 is open (blocks U-002)"])
     );
+}
+
+#[test]
+fn dirty_units_are_listed_with_the_paths_that_made_them_dirty() {
+    let p = common::Project::new();
+    let dirty_lines = |out: &str| -> Vec<String> {
+        out.lines()
+            .filter(|l| l.contains(": dirty "))
+            .map(str::to_string)
+            .collect()
+    };
+    // freshly verified: nothing dirty, and no count
+    let (_, out, _) = p.vitrify(&["check", "--all", "--skip-rotten"]);
+    assert!(dirty_lines(&out).is_empty(), "{out}");
+    assert!(!out.contains("dirty"), "{out}");
+
+    // a foundation change reaches its SDD and, through a pin, beta U-001;
+    // an anchor git cannot resolve makes beta U-002 dirty
+    p.write("a/one.txt", "one, again\n");
+    p.event(
+        "specs/beta",
+        "verified",
+        Some("U-002"),
+        "integrator",
+        "deadbee",
+    );
+    p.commit("foundation");
+    let before = snapshot(&p.root);
+    let (_, out, _) = p.vitrify(&["check", "--all", "--skip-rotten"]);
+    assert_eq!(snapshot(&p.root), before, "check wrote something");
+    assert_eq!(
+        dirty_lines(&out),
+        [
+            "alpha: dirty U-001: a/one.txt (unit alpha U-001)",
+            "alpha: dirty U-002: a/one.txt (unit alpha U-001)",
+            "beta: dirty U-001: a/one.txt (unit alpha U-001)",
+            "beta: dirty U-002: anchor deadbee cannot be resolved (rewritten history, or a shallow clone)",
+        ],
+        "{out}"
+    );
+    assert!(out.ends_with("; 4 units dirty\n"), "{out}");
+
+    let (_, v) = check_json(&p.root, &["--all", "--skip-rotten"]);
+    let anchor = p.anchor.as_str();
+    assert_eq!(
+        v[0]["dirty"],
+        serde_json::json!([
+            {"unit": "U-001", "anchor": anchor, "why": "changed",
+             "paths": [{"path": "a/one.txt", "owner": "unit alpha U-001"}]},
+            {"unit": "U-002", "anchor": anchor, "why": "changed",
+             "paths": [{"path": "a/one.txt", "owner": "unit alpha U-001"}]}
+        ])
+    );
+    assert_eq!(
+        v[1]["dirty"][1],
+        serde_json::json!({"unit": "U-002", "anchor": "deadbee", "why": "unresolved-anchor", "paths": []})
+    );
+    // one SDD: its own dirty units only
+    let (_, v) = check_json(&p.root, &["--sdd", "specs/beta", "--skip-rotten"]);
+    let units: Vec<&str> = v["dirty"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["unit"].as_str().unwrap())
+        .collect();
+    assert_eq!(units, ["U-001", "U-002"]);
 }
 
 #[test]

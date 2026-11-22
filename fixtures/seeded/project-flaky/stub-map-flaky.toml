@@ -1,0 +1,3 @@
+[units]
+U-001 = ["flaky/one.txt", "flaky/check.sh"]
+U-002 = ["flaky/two.txt"]

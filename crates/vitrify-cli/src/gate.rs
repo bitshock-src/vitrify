@@ -10,13 +10,17 @@
 //! leaves behind keeps a temp directory that exists, and toolchains that tie
 //! a daemon to its temp directory see the same few directories every time.
 //! Under `vitrify run` each command also runs in its own process group and
-//! is stopped when the run is interrupted.
+//! is stopped when the run is interrupted, and holds a token of the run's
+//! gate pool while it runs ([`install_pool`]): one bound on the commands of
+//! every gate, re-check and preflight in the process.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -25,7 +29,43 @@ use vitrify_core::audit::{self, CommandRunner};
 use vitrify_core::model::{self, Instance, Shape, Unit};
 use vitrify_core::trace::hash12;
 
+use crate::run::pool::Pool;
 use crate::signals;
+
+/// The process's gate pool, once a run has installed it.
+static POOL: OnceLock<Pool> = OnceLock::new();
+
+thread_local! {
+    /// The priority this thread's commands wait for a token at.
+    static PRIORITY: Cell<i64> = const { Cell::new(0) };
+}
+
+/// Make `size` tokens the bound on every command this process runs from
+/// here on, and return the pool. The first call decides; a later one gets
+/// the pool already installed. Without one (every verb but `run`),
+/// /// commands run unbounded, as their callers schedule them.
+pub fn install_pool(size: usize) -> &'static Pool {
+    POOL.get_or_init(|| Pool::new(size))
+}
+
+/// The priority this thread's commands wait for a gate token at.
+pub fn priority() -> i64 {
+    PRIORITY.with(Cell::get)
+}
+
+/// Run `f` with this thread's commands waiting for a gate token at
+/// `priority` (higher is served first); the previous priority is restored
+/// however `f` ends. Rows run side by side inherit it.
+pub fn at_priority<T>(priority: i64, f: impl FnOnce() -> T) -> T {
+    struct Restore(i64);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            PRIORITY.with(|p| p.set(self.0));
+        }
+    }
+    let _restore = Restore(PRIORITY.with(|p| p.replace(priority)));
+    f()
+}
 
 /// Told as each command starts and ends: how the integrator reports its
 /// progress while a gate that prints nothing is passing.
@@ -148,13 +188,22 @@ pub fn run_command(cmd: &str, cwd: &Path) -> Ran {
         output: why,
         interrupted: false,
     };
+    let stopped = || Ran {
+        code: -1,
+        output: String::new(),
+        interrupted: true,
+    };
     if signals::interrupted() {
-        return Ran {
-            code: -1,
-            output: String::new(),
-            interrupted: true,
-        };
+        return stopped();
     }
+    // a token of the run's gate pool, held until the command has ended
+    let _token = match POOL.get() {
+        Some(pool) => match pool.take_unless(priority(), &signals::interrupted) {
+            Some(token) => Some(token),
+            None => return stopped(),
+        },
+        None => None,
+    };
     let slot = match tmp_slot(cwd, "c") {
         Ok(slot) => slot,
         Err(e) => return failed(format!("cannot take a temp directory: {e}")),
@@ -272,9 +321,11 @@ pub fn run_rows_watched(
     let next = AtomicUsize::new(0);
     let slots: Vec<std::sync::Mutex<Option<Ran>>> =
         cmds.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    let priority = priority();
     std::thread::scope(|scope| {
         for _ in 0..jobs.min(cmds.len()) {
             scope.spawn(|| {
+                PRIORITY.with(|p| p.set(priority));
                 loop {
                     let i = next.fetch_add(1, Ordering::SeqCst);
                     if i >= cmds.len() || signals::interrupted() {
@@ -399,6 +450,22 @@ impl CommandRunner for MemoRunner {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn a_priority_holds_for_its_scope_and_no_longer() {
+        assert_eq!(priority(), 0);
+        let inner = at_priority(5, || {
+            assert_eq!(priority(), 5);
+            at_priority(-2, priority)
+        });
+        assert_eq!(inner, -2);
+        assert_eq!(priority(), 0);
+        // restored even when the scope panics
+        let unwound =
+            std::panic::catch_unwind(|| at_priority::<()>(7, || panic!("a row runner fell")));
+        assert!(unwound.is_err());
+        assert_eq!(priority(), 0);
+    }
 
     #[test]
     fn a_slot_let_go_is_free_at_once_though_other_threads_spawn() {

@@ -1,6 +1,6 @@
 # Build State
 
-> Understand where vitrify keeps the state of a build — unit front matter, claims and leases, input traces, the journal, and the ledger — and why mainline is the only authority.
+> Understand where vitrify keeps the state of a build — unit front matter, claims and leases, input traces, anchors, the journal, and the ledger — what a change redoes, what it keeps, and why mainline is the only authority.
 
 Use this page to learn what vitrify records, where, and who writes it. The **state of the build** is the units' front matter as committed on mainline. Claims, stamps, and journal events land only through mainline commits, so a build can be stopped and resumed from the repository alone: resume is re-derivation from repository state, never recall. For how to read this state while a run is going, see [Monitor a Run](../../user-guides/monitor-a-run.md).
 
@@ -15,7 +15,7 @@ The state has one authoritative record and several derived or supporting ones. U
 | Record | Where | Authoritative? |
 | --- | --- | --- |
 | Unit front matter | each unit's entry: status, claim fields, stamps, trace | Yes, on mainline |
-| Journal | `<sdd-root>/journal.ndjson`, or `## Journal` in a single file | The history; its replay must agree with front matter |
+| Journal | `<sdd-root>/journal.ndjson`, or `## Journal` in a single file | The history; its replay must agree with front matter; its `verified` events fix each unit's anchor |
 | Ledger | `<sdd-root>/ledger.md`, or `## State Ledger` in a single file | No — derived from front matter |
 | Run record | `.vitrify/run.json` | No — a snapshot for people and scripts |
 | Worker logs, event log, gate progress and attempt branches | `.vitrify/logs/<job>/` (with `events.jsonl` and `gate.json`), `sdd/<sdd>/<unit>/c<seq>` | No — evidence |
@@ -51,9 +51,70 @@ The keys are exactly the unit's reading set, so "what a unit is built from" and 
 
 An editorial change re-records traces without a rebuild: write a PATCH change entry and run `vitrify change apply`, which re-records the traces it moved and keeps each unit's status and stamps. The exact recipe is in the [Data Model and Formats Specification](../../reference/formats.md#4-trace-hash-recipe).
 
+## The Two Cascades
+
+A change can force two different kinds of redo, and vitrify asks both questions about every unit after every change. The first is the trace mechanism above; the second is the re-check. Use this table to see how they differ.
+
+| | **Regenerate** (a model call) | **Re-check** (gates, no model call) |
+| --- | --- | --- |
+| Depends on | The unit's reading set: its own entry, the contracts it consumes (pins included), Ground Rules and Technology Decisions | The code it is checked against (below) |
+| A change is seen when | the unit's recorded trace stops matching | a commit since the unit's **anchor** changed one of those paths |
+| Crosses SDDs through | pin hashes: the authority changes, `pin sync` moves the pin, the consumer's change entry marks it Stale | `depends_on` through pins |
+
+The pairing is the one build systems make. In a C build, editing a header recompiles every file that includes it, while changing a library's implementation only relinks and tests its dependents again [mokhov]. Here a model is the compiler: an edited contract regenerates its consumers, and changed upstream code re-checks its dependents.
+
+### The Anchor
+
+A unit's **anchor** is the commit of its latest `verified` journal event: its integration, or its latest re-check. It says where the unit's checks last passed, and every question about whether its code inputs changed is asked of the commits since it. A Verified unit with no anchor — a hand-edited status, or a `verified` event without a commit — is dirty, because nothing recorded vouches for it.
+
+### What a Unit Is Checked Against
+
+A Verified unit is **dirty** when a commit since its anchor changed a path in this list:
+
+- the files it owns, and the files of every unit it depends on, transitively — locally, and across SDDs through pins;
+- its SDD's `unmanaged:` files, and any path inside the SDD's scope roots that no unit owns;
+- paths outside every SDD's scope — or only those its SDD lists in `shared_inputs`, when it lists any. A declared empty list excludes every outside path.
+
+Spec files never dirty a re-check: a path under an SDD's own root is an input of the regeneration cascade only. A change therefore marks every transitive dependent of the units whose files it touched, and no other unit. The resolver computes each unit's closure once, and `git diff` runs once per distinct anchor, so units integrated in the same commit share one diff.
+
+### Why Upstream Code Never Regenerates a Unit
+
+A unit is generated against frozen contracts, never against its dependencies' implementations; its reading set is its own entry, the contracts it consumes, and the global regions. A change to upstream code leaves every dependent's generation inputs untouched. What it can break is whether the dependent's code still passes its checks against the new upstream code, and only a re-check answers that. If the contract changes, the regeneration cascade takes over.
+
+### Early Cutoff and Fingerprints
+
+A path counts as changed when `git diff <anchor>..<head>` lists it, beyond protocol state: claims, journals, ledgers, and the managed fields of unit entries change no path. Git names a file's content by its hash, so the comparison is of content, not of modification times — the verifying-trace discipline [mokhov], where make compares timestamps. Because the input is every file in the closure, cutoff happens at file identity: a unit regenerated into byte-identical files changes no path, and nothing downstream is re-checked [rustc-incr].
+
+### Where Re-checks Run
+
+Within an SDD, the dirty units' rows run in the integration gate, before the merge; see [Gates](gates.md#the-integration-gate). A run of one SDD also re-checks them at the start, after the lane's §5 Bootstrap, Build and Lint, and the head check that ends a run runs the rows of any unit a change has reached. Across SDDs, a re-check runs after the upstream merge, in the dependent's lane, once nothing the unit depends on has work pending, in one batch with no worker. `vitrify check` lists the dirty units with the paths that made them dirty. A project run's `vitrify run --dry-run` prints the same list under `Re-check`, with the owner of each path.
+
+### Distrusting Everything
+
+`vitrify run --recheck` distrusts every recorded check: every Verified unit's rows, and every SDD's §5 Test command, run again whatever their anchors. It regenerates nothing and still adopts Built attempts, because adoption decides only who wrote the code, never whether it is trusted. Use it after something changed that vitrify cannot see, such as a tool or system dependency outside every declared input.
+
+## Kept Progress
+
+vitrify records every success when it happens and trusts it until its inputs change. Failures are never recorded as results. Use this table to see what is kept, for how long, and what a later run does with it.
+
+| Progress | Recorded as | Trusted until | On a later run |
+| --- | --- | --- | --- |
+| A unit integrated | its `verified` stamp and journal event, in the integration commit | its trace stops matching (regenerate), or a path it is checked against changes (re-check) | nothing runs |
+| A unit re-checked | a `verified` event with actor `recheck`, and a fresh `verified:` stamp | as above | nothing runs |
+| An SDD's suite | `suite: pass` on the `audit` event | a path any of its units is checked against changes | the Test command does not run again |
+| An attempt Built but never landed | its branch: the Built stamp and the recorded trace | its trace stops matching the reading set | **adopted** |
+| An attempt that failed its own gate | its branch | — | the next worker starts from its files |
+| A failure | nothing | — | its rows run again; while they fail, its dependents wait |
+
+A re-check that passes is published as one mainline commit, `sdd: re-check U-001, U-002 at <sha>`, which appends a `verified` event for each unit it covered, carrying the checked commit as the unit's new anchor, and `suite: pass` on the `audit` event when the Test command passed. The event type is `verified`: replay sets the status to Verified, which it already is. The `verified:` stamp is a volatile field, masked from traces, so restamping moves no trace. A run killed mid-batch loses only the batch in flight; everything published before it stands.
+
+**Adoption.** An attempt is adopted when its worker is known to be gone — a run set the attempt aside, as it ended or when the next run recovered one that died — its branch carries a Built stamp, and its recorded trace matches the current reading set. An attempt whose lease merely lapsed may still have a worker writing, so it goes to a worker. The scheduler then claims the unit, which takes a new fencing token, re-labels the attempt's work as that claim's branch, and sends it straight to the gate with no worker session. Adoption skips the model, never the gate: the old token can never land, and the adopted work passes every check a fresh attempt would. An attempt the gate or its worker already judged — set aside as `rejected-gate`, `rejected-write-set`, `ownership-conflict`, `blocked`, or `released` — is not adopted, and nor is one that changed paths outside the unit's write-set; those go to a worker.
+
+**Failures stay local.** A unit that is blocked, set aside, or rotten never counts as built, so the units that depend on it, in any SDD, are neither claimed nor re-checked while it fails. Everything else keeps building and landing. Rotten units and how they are traced to a culprit are in [Gates](gates.md#rotten-units-and-culprits).
+
 ## The Journal
 
-The **journal** is the append-only history of every state transition, one JSON event per line. Its vocabulary is closed — `claim`, `renew`, `release`, `built`, `verified`, `stale`, `retired`, `change`, and `audit` — and each event carries its `seq`, time, unit, actor, claim number, and commit. Events are appended only inside commits that land on mainline and are never rewritten. Replaying the journal from empty must reproduce every unit's status and `claim_seq`; `vitrify journal replay` checks that it does, and compares the projection with the front matter.
+The **journal** is the append-only history of every state transition, one JSON event per line. Its vocabulary is closed — `claim`, `renew`, `release`, `built`, `verified`, `stale`, `retired`, `change`, and `audit` — and each event carries its `seq`, time, unit, actor, claim number, and commit. A `verified` event whose actor is `recheck` records a re-check rather than an integration, and an `audit` event may carry `suite: pass`, recording that the SDD's §5 Test command passed at its commit. Events are appended only inside commits that land on mainline and are never rewritten. Replaying the journal from empty must reproduce every unit's status and `claim_seq`; `vitrify journal replay` checks that it does, and compares the projection with the front matter.
 
 ## The Ledger
 
@@ -92,6 +153,7 @@ These are the boundaries of what the recorded state tells you.
 - Never hand-edit a status, stamp, trace, journal line, or ledger; use the state verbs and commit their output.
 - Read state from the primary checkout when it follows mainline, or from mainline itself with `git show`.
 - Record a change entry's bookkeeping with `vitrify change apply`, not by hand.
+- Let a run re-check dirty units rather than re-running every row by hand; `vitrify run --recheck` is the deliberate way to distrust the record.
 - Run `vitrify check` after any state change made outside `vitrify run`; it includes `vitrify journal replay` and `vitrify ledger regen --check`.
 - Pair every `trace record` of an authored baseline with the matching `journal append` and a `ledger regen`, then commit.
 - Treat a lapsed lease as harmless: the next claim supersedes it, and the fencing token keeps the old holder's work out.

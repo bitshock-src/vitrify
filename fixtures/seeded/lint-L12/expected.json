@@ -1,0 +1,24 @@
+{
+  "findings": [
+    {
+      "sdd": "api",
+      "check": "L12",
+      "subject": "U-002"
+    },
+    {
+      "sdd": "api",
+      "check": "L12",
+      "subject": "api U-001 → core U-002 → api U-001"
+    },
+    {
+      "sdd": "api",
+      "check": "L12",
+      "subject": "U-003"
+    },
+    {
+      "sdd": "core",
+      "check": "L12",
+      "subject": "api U-001 → core U-002 → api U-001"
+    }
+  ]
+}

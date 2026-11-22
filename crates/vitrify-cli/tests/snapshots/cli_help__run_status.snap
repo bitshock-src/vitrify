@@ -35,21 +35,27 @@ Options:
 Read-only: writes no file, takes no lock, runs git only with --no-optional-locks; point it at
 a live run from another terminal.
 Reads:   .vitrify/run.json (the latest job) or the --job's .vitrify/logs/<job>/: run.json,
-         gate.json, events.jsonl, report.txt, the worker logs; process liveness; each
-         worker worktree's git state and front matter
+         project.json, events.jsonl, report.txt, and each lane's <slug>/: gate.json, the
+         worker logs; process liveness; each worker worktree's git state and front matter
 Writes:  nothing
 Prints:  the run's state (alive, died or ended), the progress line, one line per worker
          with its stage, the gate's step; once the run has ended, its final report under
-         Report:; warnings as `! <text>` lines.
+         Report:; warnings as `! <text>` lines. A run of several SDDs shows, in place of
+         the progress line, one line per lane: slug, state (idle, build, recheck, up to
+         date, complete, blocked), Verified/total, in flight, waiting, and what an idle or
+         blocked lane waits on (units of other lanes)
          Stages: reading · editing · stamped · exited · ? (unknown) while running;
            queued · gate · integrating while integrating; else the outcome itself
          Warnings: an empty log after --quiet-after; no output for --quiet-after; 90% of
            worker_timeout_minutes used; a run that died, with a kill -9 -- -<pid> line for
            each worker process group still running
          --json, in order: job_id, pid, sdd, harness, started_at, at, state, terminated,
-           report, progress, params, workers, gate, warnings, logs
-         --follow: the view once, then one line per change until the run ends;
-           --json one event object per line; --since-start first replays events.jsonl
+           report, progress, params, workers, gate, warnings, logs, lanes: [{slug, root,
+           state, verified, total, in_flight, waiting, waits_on}]
+         --follow: the view once, then one line per change until the run ends, a lane's
+           change of state included, lines naming their lane `[<slug>]` when there are
+           several; --json one event object per line; --since-start first replays
+           events.jsonl
 Exit status: without --follow: 0 a run is shown, whatever its state · 4 no run recorded, or
          --job names none · 2 usage error.
          --follow exits with the followed run: 0 complete · 2 blocked · 1 error, interrupted,

@@ -91,29 +91,36 @@ fn rel(path: &Path, root: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// The repo-relative files and directories of an SDD itself — a bundle's
+/// directory (at the repository root: its own files and directories only), a
+/// single-file SDD's file. No `owns` glob covers them, and they are the
+/// regeneration cascade's inputs, never the re-check cascade's.
+pub fn spec_paths(inst: &Instance, root: &Path) -> Vec<String> {
+    match inst.shape {
+        Shape::Bundle => {
+            let dir = rel(&inst.root, root);
+            if dir.is_empty() {
+                BUNDLE_FILES
+                    .iter()
+                    .chain(BUNDLE_DIRS.iter())
+                    .map(|p| p.to_string())
+                    .collect()
+            } else {
+                vec![dir]
+            }
+        }
+        Shape::Single => vec![rel(&inst.file, root)],
+    }
+}
+
 impl WriteSet {
     /// The write-set of `unit` as `inst` defines it; `root` is the repository
     /// root the instance was loaded under.
     pub fn of(inst: &Instance, unit: &Unit, root: &Path) -> Result<WriteSet, CoreError> {
-        let (spec_file, spec_paths) = match inst.shape {
-            Shape::Bundle => {
-                let dir = rel(&inst.root, root);
-                let paths = if dir.is_empty() {
-                    // a bundle at the repository root: its own files only
-                    BUNDLE_FILES
-                        .iter()
-                        .chain(BUNDLE_DIRS.iter())
-                        .map(|p| p.to_string())
-                        .collect()
-                } else {
-                    vec![dir]
-                };
-                (rel(&unit.file, root), paths)
-            }
-            Shape::Single => {
-                let file = rel(&inst.file, root);
-                (file.clone(), vec![file])
-            }
+        let spec_paths = spec_paths(inst, root);
+        let spec_file = match inst.shape {
+            Shape::Bundle => rel(&unit.file, root),
+            Shape::Single => rel(&inst.file, root),
         };
         Ok(WriteSet {
             unit: unit.unit.clone(),

@@ -47,7 +47,7 @@ An SDD is either a bundle or a single file. Both carry the same regions under th
 | Bundle | `specs/<slug>/sdd.md`, `units/U-*.md`, `contracts/C-*.md`, `ledger.md` (derived), `journal.ndjson`, `changelog.md`, `decisions.md` | the default, and the shape for parallel builds |
 | Single file | `specs/<slug>.sdd.md`, with units and contracts as `###` regions, the ledger as a section, and the journal as a fenced block | about eight units or fewer, built one at a time |
 
-In a bundle, each unit is its own file, so parallel workers claim and stamp their units without touching the same file. Under `vitrify run`, a single-file SDD forces the worker cap to 1, because every status edit lands in the same file. `vitrify new sdd` creates a bundle and `vitrify new sdd --single` creates a single file.
+In a bundle, each unit is its own file, so parallel workers claim and stamp their units without touching the same file. Under `vitrify run`, a single-file SDD's lane takes one worker at a time, because every status edit lands in the same file. `vitrify new sdd` creates a bundle and `vitrify new sdd --single` creates a single file.
 
 ## SDD Lifecycle
 
@@ -85,11 +85,11 @@ Every bump has a `CH-###` change entry in the changelog, and the SDD's `version`
 
 ## Schema Version
 
-An SDD declares the schema version it is written to in `schema_version`, in its core front matter. The key is required, and vitrify reads exactly one version: `2.0` (written `2`, `2.0`, or `2.0.x`). A missing key or any other value is refused with exit 4 and a message naming `2.0`; `vitrify locate` still lists the refused SDD, so it is seen. `vitrify new sdd` writes `schema_version: 2.0`. The rule behind one read version is in the [Data Model and Formats Specification](../../reference/formats.md#10-versioning).
+An SDD declares the schema version it is written to in `schema_version`, in its core front matter. The key is required, and this vitrify reads two versions: `2.0` (written `2`, `2.0`, or `2.0.x`) and `2.1` (written `2.1` or `2.1.x`). In 2.1 a unit's `depends_on` may name a pin, to wait for the units that produce the pinned contract in another SDD; every 2.0 document means the same under 2.1. A missing key or any other value is refused with exit 4 and a message naming both versions; `vitrify locate` still lists the refused SDD, so it is seen. `vitrify new sdd` writes `schema_version: 2.1`. The rule behind the read versions is in the [Data Model and Formats Specification](../../reference/formats.md#10-versioning).
 
 ## Several SDDs in One Repository
 
-A repository can hold several SDDs, and vitrify scopes everything to one of them at a time. Each SDD has its own `sdd:` slug and disjoint `scope_roots`; unit IDs, reading sets, traces, branches, and worktrees all belong to one SDD. Name the SDD with `--sdd <root>`, or pass `--all` to the verbs that check (`lint`, `check`, `audit`, `ledger`, `pin`, `journal replay`, `change apply`, and `questions`). When one SDD codes against another's surface, it does so through an [external contract](contracts.md#external-contracts). See [Work With Several SDDs](../../user-guides/multiple-sdds.md).
+A repository can hold several SDDs, and vitrify scopes everything to one of them at a time. Each SDD has its own `sdd:` slug and disjoint `scope_roots`; unit IDs, reading sets, traces, branches, and worktrees all belong to one SDD. Name the SDD with `--sdd <root>` (`vitrify run` builds every Active SDD when it is not named), or pass `--all` to the verbs that check (`lint`, `check`, `audit`, `ledger`, `pin`, `journal replay`, `change apply`, and `questions`). When one SDD codes against another's surface, it does so through an [external contract](contracts.md#external-contracts). See [Work With Several SDDs](../../user-guides/multiple-sdds.md).
 
 vitrify finds SDDs in a fixed order — bundles at `specs/*/sdd.md`, single files at `specs/*.sdd.md`, then a repository-wide search over the files git would commit — and counts only files whose front matter has an `sdd` key. The exact rules are in the [Data Model and Formats Specification](../../reference/formats.md#2-instance-shapes-and-discovery).
 
@@ -99,8 +99,8 @@ These are the boundaries of what vitrify checks about your documents.
 
 - vitrify never edits a TDD. Lint L11 checks the TDD pin fully only where the TDD carries the metadata table of vitrify's own template; elsewhere it checks only that `tdd:` names a file.
 - Lint checks structure — dependencies, ownership, requirement coverage, budgets, references, versions — not whether prose is truly decision-complete. That judgment stays with the author.
-- One run builds one SDD. Nothing in an SDD declares an order between SDDs, so you run them in the order you know.
-- A change to the document format raises `schema_version`, and this vitrify reads only `2.0`. See [Versioning](../../reference/formats.md#10-versioning).
+- Order between SDDs exists only where a unit's `depends_on` names a pin. A plain `vitrify run` builds every Active SDD of the repository together, and SDDs that read each other's contracts as interfaces build side by side.
+- A change to the document format raises `schema_version`, and this vitrify reads `2.0` and `2.1`. See [Versioning](../../reference/formats.md#10-versioning).
 
 ## Practical Guidance
 

@@ -4,19 +4,27 @@
 
 pub const LOCATE: &str = "\
 Reads:   SDD discovery (specs/*/sdd.md, specs/*.sdd.md, then the files git would commit);
-         with --units, the SDD's units and their front matter
+         with --units, the SDD's units and their front matter, and — for a pin in
+         depends_on — the units of other SDDs it waits on; with --graph, every SDD's units
+         and contracts
 Writes:  nothing
 Prints:  one line per SDD: root, shape, slug, version, status, unit count
          --json: [{root, shape, sdd, title, version, status, scope_roots, units}]
          --units: one line per unit: status, parallel group, claim_seq, claimable
          --units --json: {sdd, shape, version, status, units: [{unit, status, parallel_group,
            depends_on, claimed_by, claim_expires, claim_seq, lease_live, claimable, file}]}
+         --graph: per SDD, `<sdd> → <sdd>  via <pins>` and its unit edges, or `(depends on
+           no other SDD)`; then each cycle and each unit waiting behind one
+         --graph --json: {sdds, sdd_edges: [{from, to, pins, units}], unit_edges: [{from, to,
+           via}], order, cycles, waiting}, each unit {sdd, unit}
 Exit status: 0 listed · 4 no SDD; with --units, several and no --sdd · 2 usage error
-         An SDD of a schema version this vitrify does not read is still listed.
+         An SDD of a schema version this vitrify does not read is still listed (--graph
+         leaves it out, named on stderr).
 Examples:
   vitrify locate
   vitrify locate --units --sdd specs/calc
-  vitrify locate --units --json";
+  vitrify locate --units --json
+  vitrify locate --graph";
 
 pub const READSET: &str = "\
 Reads:   the core file's Ground Rules and Technology Decisions; the unit's entry; each
@@ -38,7 +46,8 @@ pub const CLAIM: &str = "\
 A protocol verb for workers, the integrator and authored baselines; not run by hand while
 `vitrify run` builds the SDD.
 Reads:   the mainline head (checked out into a throwaway .vitrify/tx-<pid>-<n> worktree);
-         the unit's front matter there
+         the unit's front matter there, and the units of other SDDs a pin in its
+         depends_on waits on
 Writes:  a published mainline commit `sdd: claim <unit> (c<seq>) by <holder>`: status Claimed,
          claimed_by, claim_expires = now + lease, claim_seq + 1; a claim event; the ledger.
          The primary checkout is fast-forwarded when it has mainline checked out.
@@ -267,61 +276,94 @@ Examples:
   vitrify probe --json --assume-yes";
 
 pub const RUN: &str = "\
-Builds one SDD until it is Complete or Blocked: claims, dispatches workers, integrates,
-publishes. Interrupt it (Ctrl-C, kill -INT <pid>), never its workers; running it again resumes.
-Reads:   the SDD on mainline; ~/.vitrify/config.toml (the recorded harness spelling and
-         the role profiles); the §5 commands it runs
-Writes:  published mainline commits (claims, renewals, releases, each Verified unit);
+Builds until Complete or Blocked: claims, dispatches workers, integrates, publishes.
+With several SDDs and no --sdd it is a project run: every Active SDD is a lane, one scheduler
+dispatches across them critical path first, and each SDD's dependents re-check after the
+merge. --sdd builds one SDD as a single lane; --upstream adds the SDDs it depends on.
+Interrupt it (Ctrl-C, kill -INT <pid>), never its workers; running it again resumes.
+Reads:   the SDDs on mainline; ~/.vitrify/config.toml (the recorded harness spelling and
+         the role profiles); the §5 commands it runs; with run.priority = \"history\",
+         earlier runs' records
+Writes:  published mainline commits (claims, renewals, releases, each Verified unit, the
+           re-checks it made: `verified` events by recheck, suite: \"pass\");
          .vitrify/run.json, the latest run's snapshot, its report null until it ends;
-         .vitrify/logs/<job>/: run.json, gate.json, events.jsonl (one line per event),
-           report.txt (the final report), worker-<holder>.out, .err and .prompt.md,
-           escalation-<n>.json;
-         unit worktrees and the integration checkout under run.worktree_dir.
-         --dry-run publishes nothing and moves no file.
-Prints:  stdout: the job header (SDD build job — <sdd> @ <version>  [<job>], Done-condition,
-         Mainline, Plan, Workers, Roles, Worktrees, Parameters), then, before anything is
-         dispatched:
+         .vitrify/logs/<job>/: run.json, project.json (the plan, each lane's state and
+           records path, the critical path as it ran), events.jsonl (one line per event,
+           a lane's naming it; in a project run a `pass` line per change in the slots),
+           report.txt (the final report);
+         .vitrify/logs/<job>/<slug>/, one per lane: gate.json, worker-<holder>.out, .err
+           and .prompt.md, escalation-<n>.json;
+         under run.worktree_dir: unit worktrees, and per SDD its integration checkout
+           (mainline-<slug>, made anew each run) with its lock, its base checkout
+           (base-<slug>) and its culprit probe checkout (probe-<slug>).
+         --dry-run publishes nothing and touches no file of the repository.
+Prints:  stdout, a project run: Project build job — <n> SDDs: <lane states>  [<job>], Plan,
+         Critical path, Capacity, Watch; one [<slug>] line per event; the final report:
+         Complete. or Blocked., then one line per SDD — its slug, its state (Complete,
+         Up to date or Blocked) and why — each further blocker indented below.
+         Lane states: idle, build, recheck, up to date, complete, blocked.
+         stdout, one SDD: the job header (SDD build job — <sdd> @ <version>  [<job>],
+         Done-condition, Mainline, Plan, Workers, Roles, Worktrees, Parameters), then,
+         before anything is dispatched:
            Watch: vitrify run status --job <job> [--follow] · once it ends, the same command
            prints the report · procedure: vitrify brief run
-         then one line per event, then one final report: Complete. or Blocked., the progress
-         line, each blocker, the journal tail (replay: exit 0 (consistent)).
-         --dry-run: the header and any claim it would recover, ending
-           Start: vitrify run <the flags given, without --dry-run>
+         then one line per event — [<slug>] <unit> adopted (built attempt c<n>) → gate,
+         [<slug>] <unit> rotten: …, [<slug>] <culprit finding> among them — then one final
+         report: Complete. or Blocked., the progress line, each blocker (a rotten unit
+         with its culprit), the journal tail (replay: exit 0 (consistent)).
+         Only the rows of units a change reached since their last recorded check run, at
+           the start and in each gate; with nothing to build or re-check, none run.
+         --recheck: every Verified unit's rows and the §5 Test command run again.
+         --dry-run: the header and any claim it would recover (a project run: the whole
+           plan, lane by lane — the same for the same repository and configuration),
+           ending Start: vitrify run <the flags given, without --dry-run>
          stderr: worker reports, gate failures, notes, warnings, and each
            preflight failed: <cause> → <fix>
 Exit status: 0 Complete. (--dry-run: preflight passed) · 2 Blocked., a preflight failure,
-         an abort verdict, or a usage error · 1 an error, its message last on stderr.
+         an abort verdict, or a usage error · 1 an error, its message last on stderr ·
+         4 a project run with an SDD at schema 2.0 whose units consume pins.
          An interrupted run cleans up and ends by the signal it received.
 Config:  mainline (VITRIFY_MAINLINE) · run.worker_cap (VITRIFY_RUN_WORKER_CAP, --cap)
          · run.lease_minutes · run.renew_fraction · run.abort_failed_waves
-         · run.worker_timeout_minutes · run.gate_jobs (--gate-jobs) · run.poll_seconds
-         · run.worktree_dir · harness.preferred · lint.readset_budget_bytes;
+         · run.worker_timeout_minutes · run.gate_jobs (--gate-jobs)
+         · run.poll_seconds · run.lane_cap · run.priority · run.worktree_dir
+         · harness.preferred
+         · lint.readset_budget_bytes;
          each key's variable is VITRIFY_<SECTION>_<KEY> (VITRIFY_RUN_GATE_JOBS, …)
 Examples:
+  vitrify run --dry-run
+  vitrify run --sdd specs/api --upstream
   vitrify run --dry-run --sdd specs/calc
   vitrify run --sdd specs/calc
   vitrify run --cap 2 --gate-jobs 1 --wait
+  vitrify run --recheck
 Procedure: vitrify brief run";
 
 pub const RUN_STATUS: &str = "\
 Read-only: writes no file, takes no lock, runs git only with --no-optional-locks; point it at
 a live run from another terminal.
 Reads:   .vitrify/run.json (the latest job) or the --job's .vitrify/logs/<job>/: run.json,
-         gate.json, events.jsonl, report.txt, the worker logs; process liveness; each
-         worker worktree's git state and front matter
+         project.json, events.jsonl, report.txt, and each lane's <slug>/: gate.json, the
+         worker logs; process liveness; each worker worktree's git state and front matter
 Writes:  nothing
 Prints:  the run's state (alive, died or ended), the progress line, one line per worker
          with its stage, the gate's step; once the run has ended, its final report under
-         Report:; warnings as `! <text>` lines.
+         Report:; warnings as `! <text>` lines. A run of several SDDs shows, in place of
+         the progress line, one line per lane: slug, state (idle, build, recheck, up to
+         date, complete, blocked), Verified/total, in flight, waiting, and what an idle or
+         blocked lane waits on (units of other lanes)
          Stages: reading · editing · stamped · exited · ? (unknown) while running;
            queued · gate · integrating while integrating; else the outcome itself
          Warnings: an empty log after --quiet-after; no output for --quiet-after; 90% of
            worker_timeout_minutes used; a run that died, with a kill -9 -- -<pid> line for
            each worker process group still running
          --json, in order: job_id, pid, sdd, harness, started_at, at, state, terminated,
-           report, progress, params, workers, gate, warnings, logs
-         --follow: the view once, then one line per change until the run ends;
-           --json one event object per line; --since-start first replays events.jsonl
+           report, progress, params, workers, gate, warnings, logs, lanes: [{slug, root,
+           state, verified, total, in_flight, waiting, waits_on}]
+         --follow: the view once, then one line per change until the run ends, a lane's
+           change of state included, lines naming their lane `[<slug>]` when there are
+           several; --json one event object per line; --since-start first replays
+           events.jsonl
 Exit status: without --follow: 0 a run is shown, whatever its state · 4 no run recorded, or
          --job names none · 2 usage error.
          --follow exits with the followed run: 0 complete · 2 blocked · 1 error, interrupted,
@@ -333,9 +375,10 @@ Examples:
 Procedure: vitrify brief run";
 
 pub const LINT: &str = "\
-Reads:   the SDD; the other SDDs it pins (L9); its changelog (L10); its TDD (L11)
+Reads:   the SDD; the other SDDs it pins (L9); its changelog (L10); its TDD (L11); for a
+         pin in depends_on, every SDD's units and contracts (L12)
 Writes:  nothing
-Prints:  `lint clean (L1–L11)`, or one `[L#] subject: cause → remediation` line per finding;
+Prints:  `lint clean (L1–L12)`, or one `[L#] subject: cause → remediation` line per finding;
          --all prefixes each line with the slug
          --json: {clean, findings: [{check, subject, cause, remediation}]};
          --all: an array of {sdd, root, clean, findings}
@@ -350,15 +393,25 @@ pub const CHECK: &str = "\
 Runs every read-only check over one SDD, or with --all the repository: lint (--built once
 any unit has build state or a journal exists), audit (check 4 unless --skip-rotten), journal
 replay (where a journal exists), ledger regen --check (where a ledger or journal exists) and
-the pin states. Runs no §5 command; vitrify run --dry-run does.
-Reads:   each SDD, its journal and ledger, the SDDs it pins, its changelog and TDD
+the pin states. In a git repository it also lists the dirty units: Verified units whose
+checked-against paths a commit changed since their last recorded check (their files, those
+of every unit they depend on, unmanaged and outside-scope paths), or whose anchor git cannot
+resolve. Dirty units are not findings and nothing re-checks them here; vitrify run does.
+Runs no §5 command; vitrify run --dry-run does.
+Reads:   each SDD, its journal and ledger, the SDDs it pins, its changelog and TDD; for the
+         dirty units every SDD of the repository and git history up to HEAD
 Writes:  nothing
 Prints:  one `<slug>: [<source> <check>] subject: cause → remediation` line per finding,
-         then `<slug>: note: Q-### is open (blocks …)` notes, then
-         `check clean: N SDDs`, or `check: N findings in M of K SDDs`
+         then `<slug>: note: Q-### is open (blocks …)` notes, then one
+         `<slug>: dirty U-###: <path> (<owner>), …` line per dirty unit, then
+         `check clean: N SDDs`, or `check: N findings in M of K SDDs`, ending
+         `; N units dirty` when there are any
+         stderr: `note: dirty units not computed: …` when an SDD cannot be read or the
+           unit graph has a cycle
          --json: {sdd, root, clean, findings: [{source, check, subject, cause, remediation}],
-           notes}; an array with --all. source: lint, audit, journal, ledger or pin;
-           check: \"L4\", \"5\" or null
+           notes, dirty: [{unit, anchor, why, paths: [{path, owner}]}]}; an array with --all.
+           source: lint, audit, journal, ledger or pin; check: \"L4\", \"5\" or null;
+           why: changed, no-anchor or unresolved-anchor
 Exit status: the worst component (an error, 1, wins; else the highest): 0 clean · 2 a lint,
          audit or pin finding, or a usage error · 3 a journal or ledger mismatch · 4 no SDD,
          several and no --sdd, a schema version this vitrify does not read
@@ -469,7 +522,7 @@ Reads:   ~/.vitrify/templates/ ($VITRIFY_HOME; an override on disk wins)
 Writes:  the working tree, in the current directory: tdd → NAME.md (default tdd.md);
          sdd → NAME/ bundle with sdd.md, units/, contracts/, changelog.md, decisions.md;
          sdd --single → NAME.sdd.md (default NAME scope). An SDD declares
-         schema_version: 2.0. Never overwrites.
+         schema_version: 2.1. Never overwrites.
 Prints:  the created path; stderr: `next: fill <path> per vitrify schema show, then run
          vitrify lint --sdd <path>` (sdd), `next: fill <path> per vitrify schema show --tdd`
          (tdd)
@@ -491,7 +544,7 @@ Examples:
 pub const SCHEMA_SHOW: &str = "\
 Reads:   ~/.vitrify/schemas/ ($VITRIFY_HOME; an override on disk wins)
 Writes:  nothing in the repository; restores or refreshes its copy under ~/.vitrify/
-Prints:  the SDD schema (schema_version 2.0), or with --tdd the TDD schema
+Prints:  the SDD schema (schema_version 2.1), or with --tdd the TDD schema
 Exit status: 0 printed · 1 the file cannot be read · 2 usage error
 Config:  VITRIFY_HOME
 Examples:

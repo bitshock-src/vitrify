@@ -21,8 +21,8 @@ takes `--sdd <root>` or `--all`.
 
 List what the change touches: the SDDs, their roots and `scope_roots`
 (`vitrify locate --json`); the contracts that cross SDDs, and their state
-(`vitrify pin list --all`); and the TDD revisions involved. For **more than one SDD**, write the plan
-first: which SDD gets which entry and bump, producers before consumers.
+(`vitrify pin list --all`); and the TDD revisions involved. For **more than one SDD**, write the
+list of changes first: which SDD gets which entry and bump, producers before consumers.
 Check it against those two listings — every SDD named exists, every pin it
 expects is listed — before editing anything. Show it to the human when the
 change is theirs to approve.
@@ -35,7 +35,7 @@ any SDD text changes; you do not.
 
 ## 2. Each SDD, producers first
 
-For each SDD in the plan's order:
+For each SDD, producers first:
 
 1. Edit the text in place — units, contracts, Ground Rules, Technology
    Decisions. Never leave the old text beside the new.
@@ -94,12 +94,47 @@ It must exit 0. Each finding names its fix; fix and re-run. Then run the
 project's own checks where the repository documents any (an index of SDD
 conventions, scripts beside the specs).
 
-## 6. Commit and rebuild
+## 6. Migrate an SDD to schema 2.1
+
+Do this once for each SDD whose units consume pins and which declares
+`schema_version: 2.0`. A project run (`vitrify brief run`) refuses such an
+SDD (exit 4) until it is migrated. Start from a consistent repository:
+everything committed, pins synced (`vitrify pin sync --all`), and
+`vitrify check --all` clean.
+
+1. Classify each pin each unit consumes (`vitrify pin list --sdd <root>`):
+   **code** (the unit imports or links it, installs its package, or runs
+   its CLI) or **interface/data** (it only codes against it or parses it).
+2. Add each code pin to that unit's `depends_on`; it stays in `consumes`.
+   Interface and data pins stay in `consumes` alone.
+3. Set `schema_version: 2.1`.
+4. Record it all as one **PATCH** change entry, and `vitrify change apply`
+   it. `depends_on` is part of each unit's trace, so a MINOR or MAJOR entry
+   would mark the units Stale and rebuild them; PATCH re-records the traces
+   and rebuilds nothing, since the entry only records a need the built
+   code already has.
+
+## 7. What a change regenerates and what it re-checks
+
+* **Regenerated (a model call):** a unit whose spec inputs moved — its
+  entry, a contract it consumes (a synced pin included), Ground Rules or
+  Technology Decisions. A change entry marks it Stale.
+* **Re-checked (no model call):** a Verified unit whose code inputs moved
+  since its last check: its own files, the files of the units it depends on
+  (through pins too), its SDD's unmanaged files, and paths outside every
+  scope (or only its SDD's `shared_inputs`). Another SDD's code change
+  therefore re-checks its dependents and regenerates none of them.
+* A unit regenerated into identical files changes no path, so nothing
+  downstream of it is re-checked.
+* `vitrify run --dry-run` prints both, with the changed paths behind each
+  re-check.
+
+## 8. Commit and rebuild
 
 Commit everything once, at the mainline head: these verbs edit the working
 tree only, and text, entries and marks land together. Then rebuild with
-`vitrify brief run`, SDD by SDD in dependency order. A build that is going
-picks the commit up by itself.
+`vitrify brief run`: one plain `vitrify run` builds every SDD, in dependency
+order. A build that is going picks the commit up by itself.
 
 ## Never
 

@@ -1,0 +1,24 @@
+{
+  "findings": [
+    {
+      "sdd": "app",
+      "check": "L1",
+      "subject": "U-003"
+    },
+    {
+      "sdd": "app",
+      "check": "L1",
+      "subject": "U-004"
+    },
+    {
+      "sdd": "app",
+      "check": "L1",
+      "subject": "U-005"
+    },
+    {
+      "sdd": "old",
+      "check": "L1",
+      "subject": "U-001"
+    }
+  ]
+}

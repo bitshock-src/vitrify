@@ -340,6 +340,7 @@ fn kill_a_worker_stale_branch_rejected() {
             primary: Git::new(&r.root),
             layout,
             sdd_rel: PathBuf::from("specs/calc"),
+            slug: "calc".to_string(),
             branch: "main".to_string(),
             push: false,
         },

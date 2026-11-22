@@ -78,17 +78,17 @@ It is a defect. The author decides it, or records a `Q-###` question; a worker t
 
 ### Can several SDDs share a repository?
 
-Yes. Each needs its own slug and disjoint `scope_roots`; one SDD uses another's contract through a checked pin, and each SDD is built by its own run. See [Work With Several SDDs](../user-guides/multiple-sdds.md).
+Yes. Each needs its own slug and disjoint `scope_roots`; one SDD uses another's contract through a checked pin, and a plain `vitrify run` builds every Active one (see [Project Runs](#project-runs)). See [Work With Several SDDs](../user-guides/multiple-sdds.md).
 
 ## Builds
 
 ### How many workers run at once?
 
-Four by default (`run.worker_cap`, or `--cap`); a single-file SDD always runs one. Dispatch is continuous, so a unit starts as soon as it is claimable and a slot is free. See [Configuration](../cli/configuration.md).
+Four by default (`run.worker_cap`, or `--cap`), across every SDD of a project run; the lane of a single-file SDD runs one at a time. Dispatch is continuous, so a unit starts as soon as it is claimable and a slot is free. See [Configuration](../cli/configuration.md).
 
 ### What happens when a worker's attempt fails?
 
-Its work is kept on its own branch with the reason, and the unit's next worker starts from it under the `retry` profile. After two failed attempts at one unit, one escalation call returns a verdict the orchestrator enforces; after four, the unit is set aside for the run. See [Runs](../about/concepts/runs.md#retries-and-escalation).
+Its work is kept on its own branch with the reason, and the unit's next worker starts from it under the `retry` profile. After two attempts at one unit whose work failed, one escalation call returns a verdict the orchestrator enforces; after four attempts that did not land, whatever the reason, the unit is set aside for the run. An attempt a run set aside as Built is adopted rather than rebuilt, and goes to the gate with no worker. See [Runs](../about/concepts/runs.md#retries-and-escalation).
 
 ### Can I stop a build and resume it later?
 
@@ -110,6 +110,40 @@ No. Your checkout is fast-forwarded as the run publishes, with local changes car
 
 vitrify does not count tokens or cost. Each worker and each escalation is a session on your harness account; whatever the harness reports about a session is in the last events of that worker's log.
 
+## Project Runs
+
+### Does a plain `vitrify run` build every SDD?
+
+Yes, every Active one. With several SDDs and no `--sdd`, it builds them all as one project run: one unit graph across every SDD, a lane per Active SDD, one worker pool, and one gate pool; an SDD that goes Active on mainline while it runs joins as a lane. `--sdd <root>` builds one SDD alone, and with `--upstream` also the SDDs it depends on. With one SDD it builds that one. A lane whose own preflight fails is blocked, and the lanes that do not depend on it keep building. See [Design Rationale](../about/design-rationale.md#project-runs).
+
+### How does one SDD wait for another?
+
+Through a unit's `depends_on`, which may name a pin (schema 2.1). The unit waits until every unit named on the `Producer:` line of the pin's authority is built, in whichever SDD it lives. A pin a unit only lists in `consumes` orders nothing: the unit builds while its producer is still building. See [Author a Spec](../user-guides/author-a-spec.md#classify-each-pin-a-unit-consumes).
+
+### Why does a project run refuse and name an SDD at schema 2.0?
+
+Under 2.0 nothing says which pins a unit needs built first, so a project run does not guess: it refuses with exit 4 while any SDD at 2.0 has units that consume pins. Migrate each as one PATCH change entry, as in [Migrate an SDD to Schema 2.1](../user-guides/change-a-spec.md#migrate-an-sdd-to-schema-21). `vitrify run --sdd <root>` builds a 2.0 SDD alone. See [Troubleshooting](troubleshooting.md#a-project-run-refuses-an-sdd-at-schema-20).
+
+### Which unit does vitrify build first?
+
+The claimable unit with the most unfinished work behind it, in any SDD: its priority is the number of unfinished units on the longest chain from it to the end of the graph, and ties break by SDD slug, then unit ID; `run.priority = "history"` weighs each unit by how long its past worker sessions took instead of counting every unit as 1. That order is list scheduling, which finishes within a bound of the best possible time but does not promise that a larger `--cap` is faster. `vitrify run --dry-run` prints the critical path. See [Design Rationale](../about/design-rationale.md#scheduling-and-capacity).
+
+### What does a change to one SDD cost the others?
+
+Only the re-checks it reaches. A spec change regenerates the units whose traces it moved, with a model call each. A code change in an upstream SDD never regenerates a downstream unit; it re-checks the units that depend on it, locally and across SDDs, by running their Verification rows again with no model call. A unit regenerated into identical files re-checks nothing. See [Build State](../about/concepts/build-state.md#the-two-cascades).
+
+### What does `--recheck` do?
+
+It distrusts every recorded check: every Verified unit's rows and every SDD's §5 Test command run again, whatever their anchors. It regenerates nothing and still adopts built attempts through the full gate. Use it after something changed that vitrify cannot see, such as a tool outside every declared input. See [Build State](../about/concepts/build-state.md#distrusting-everything).
+
+### Can two SDDs consume each other's contracts?
+
+Yes: pins in both directions are normal, because a pin in `consumes` orders nothing. Only a cycle in the unit graph is refused, which needs units to depend on each other through `depends_on`. See [Troubleshooting](troubleshooting.md#a-project-run-refuses-a-cycle).
+
+### How much disk does a project run use?
+
+Each lane has its own integration checkout, made anew when the lane first builds or re-checks in a run, beside a base checkout and a culprit-probe checkout for each SDD, so disk use grows with the number of lanes. `run.lane_cap` bounds how many lanes hold their checkouts at once: lanes are admitted by priority, and a lane with nothing left to do removes its checkouts so the next can be admitted; `0`, the default, is no limit. See [Configuration](../cli/configuration.md).
+
 ## Security and Data
 
 ### Does vitrify send my code anywhere?
@@ -122,7 +156,7 @@ Whatever your harness settings allow a headless session to do; vitrify passes no
 
 ### What do the logs contain?
 
-Each worker's full prompt and session output, and each escalation's evidence and verdict, under `.vitrify/logs/<job>/`. vitrify never deletes them. Protect them as you would any agent transcript.
+Each worker's full prompt and session output, and each escalation's evidence and verdict, under `.vitrify/logs/<job>/<slug>/`, one directory per SDD. vitrify never deletes them. Protect them as you would any agent transcript.
 
 ## Troubleshooting, Releases, and Contributing
 

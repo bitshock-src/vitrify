@@ -1,7 +1,7 @@
 ---
 sdd: [scope-slug]
 title: [Title]
-schema_version: 2.0
+schema_version: 2.1
 version: 0.1.0
 status: Draft
 tdd: ../../docs/tdd/[scope].md

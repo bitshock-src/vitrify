@@ -25,6 +25,10 @@ abort_failed_waves = 2         # failed attempts of one unit before the
 worker_timeout_minutes = 120   # hard wall-clock budget per worker
 gate_jobs = 0                  # Verification rows run at once;
                                #   0 = one per CPU core, 1 = one at a time
+lane_cap = 0                   # lanes (one SDD's part of a run) holding their
+                               #   checkouts on disk at once; 0 = no limit
+priority = "depth"             # how ready units are ranked: "depth" (every unit
+                               #   weighs 1) or "history" (by past session times)
 poll_seconds = 30              # how often an idle run re-reads mainline
 worktree_dir = ""              # "" = ~/.vitrify/worktrees/<repo>-<hash>;
                                #   relative = from the repository root

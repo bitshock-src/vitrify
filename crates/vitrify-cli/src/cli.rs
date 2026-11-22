@@ -26,12 +26,16 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
-    /// Find SDD instances; list units and claimability
+    /// Find SDD instances; list units and claimability; show the SDD graph
     #[command(after_long_help = help::verbs::LOCATE)]
     Locate {
         /// List units of one SDD with the computed claimable flag
         #[arg(long)]
         units: bool,
+        /// Show the SDD graph the units' depends_on edges imply, with the
+        /// pins and unit edges behind each SDD edge
+        #[arg(long, conflicts_with_all = ["units", "sdd"])]
+        graph: bool,
         /// SDD root: a bundle directory, its sdd.md, or a single *.sdd.md
         /// (default: every SDD; with --units, the one SDD in the repository)
         #[arg(long, value_name = "ROOT")]
@@ -164,6 +168,15 @@ pub enum Cmd {
         /// the spec changes, instead of ending Blocked
         #[arg(long)]
         wait: bool,
+        /// Trust no recorded check: run every Verified unit's rows and the
+        /// §5 Test command again (rebuilds nothing; built attempts are still
+        /// adopted)
+        #[arg(long)]
+        recheck: bool,
+        /// With --sdd: build the SDDs it depends on too, each a lane of one
+        /// project run
+        #[arg(long, requires = "sdd")]
+        upstream: bool,
         /// SDD root to build: a bundle directory, its sdd.md, or a single
         /// *.sdd.md (default: the one SDD in the repository)
         #[arg(long, value_name = "ROOT")]
@@ -175,7 +188,7 @@ pub enum Cmd {
         #[command(subcommand)]
         sub: Option<RunSub>,
     },
-    /// Mechanical authoring checks (L1–L11)
+    /// Mechanical authoring checks (L1–L12)
     #[command(after_long_help = help::verbs::LINT)]
     Lint {
         /// SDD root: a bundle directory, its sdd.md, or a single *.sdd.md

@@ -30,7 +30,8 @@ Options:
 A protocol verb for workers, the integrator and authored baselines; not run by hand while
 `vitrify run` builds the SDD.
 Reads:   the mainline head (checked out into a throwaway .vitrify/tx-<pid>-<n> worktree);
-         the unit's front matter there
+         the unit's front matter there, and the units of other SDDs a pin in its
+         depends_on waits on
 Writes:  a published mainline commit `sdd: claim <unit> (c<seq>) by <holder>`: status Claimed,
          claimed_by, claim_expires = now + lease, claim_seq + 1; a claim event; the ledger.
          The primary checkout is fast-forwarded when it has mainline checked out.

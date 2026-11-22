@@ -111,9 +111,13 @@ From the integration worktree root, all exit 0:
 
 1. SDD §5 Commands: bootstrap, then build.
 2. This unit's full Verification table.
-3. Every currently-Verified unit's Verification table (semantic conflicts
-   between parallel units are caught exactly here). A command that several
-   units list need run only once.
+3. The Verification table of every Verified unit a change has reached
+   since its last recorded check — `vitrify check --sdd <root>`, run here
+   after the merge, lists them as dirty units, and every unit that depends
+   on this one is among them (semantic conflicts between parallel units are
+   caught exactly here). When the SDD has no §5 Test command, every
+   currently-Verified unit's table instead. A command that several units
+   list need run only once.
 4. The §5 Lint command.
 5. The §5 Test command, when the SDD has one — the whole suite, as a
    regression check: if it passed at `<head>`, it must pass now. If it

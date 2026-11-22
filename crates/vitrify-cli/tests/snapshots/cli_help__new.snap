@@ -31,7 +31,7 @@ Reads:   ~/.vitrify/templates/ ($VITRIFY_HOME; an override on disk wins)
 Writes:  the working tree, in the current directory: tdd → NAME.md (default tdd.md);
          sdd → NAME/ bundle with sdd.md, units/, contracts/, changelog.md, decisions.md;
          sdd --single → NAME.sdd.md (default NAME scope). An SDD declares
-         schema_version: 2.0. Never overwrites.
+         schema_version: 2.1. Never overwrites.
 Prints:  the created path; stderr: `next: fill <path> per vitrify schema show, then run
          vitrify lint --sdd <path>` (sdd), `next: fill <path> per vitrify schema show --tdd`
          (tdd)

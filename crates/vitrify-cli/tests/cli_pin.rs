@@ -163,7 +163,7 @@ fn seeded_fixtures_report_exactly_their_own_finding() {
         for sdd in ["specs/alpha", "specs/gamma.sdd.md"] {
             let ran = s.run(&["lint", "--sdd", sdd]);
             assert_eq!(ran.code, 0, "{fixture} {sdd}: {}", ran.stdout);
-            assert_eq!(ran.stdout, "lint clean (L1–L11)\n");
+            assert_eq!(ran.stdout, "lint clean (L1–L12)\n");
         }
     }
 }
@@ -613,7 +613,7 @@ fn sync_rewrites_a_single_file_sdds_pin_in_place() {
     // the file is still the SDD it was, and its unit reads the new body
     assert_eq!(
         s.ok(&["lint", "--sdd", "specs/gamma.sdd.md"]).stdout,
-        "lint clean (L1–L11)\n"
+        "lint clean (L1–L12)\n"
     );
     let ran = s.ok(&["locate", "--units", "--sdd", "specs/gamma.sdd.md"]);
     assert!(ran.stdout.starts_with("U-001    Ready"), "{}", ran.stdout);
@@ -873,7 +873,7 @@ fn a_schema_version_this_vitrify_does_not_read_is_refused() {
         assert_eq!(ran.code, 4, "{args:?}: {}", ran.stdout);
         assert!(
             ran.stderr
-                .contains("schema_version 1.1 is not one this vitrify reads (2.0)"),
+                .contains("schema_version 1.1 is not one this vitrify reads (2.0 and 2.1)"),
             "{args:?}: {}",
             ran.stderr
         );
@@ -890,12 +890,12 @@ fn a_schema_version_this_vitrify_does_not_read_is_refused() {
     let ran = s.run(&["lint", "--all"]);
     assert_eq!(ran.code, 4);
     assert!(
-        ran.stdout.contains("alpha: lint clean (L1–L11)"),
+        ran.stdout.contains("alpha: lint clean (L1–L12)"),
         "{}",
         ran.stdout
     );
     assert!(
-        ran.stdout.contains("gamma: lint clean (L1–L11)"),
+        ran.stdout.contains("gamma: lint clean (L1–L12)"),
         "{}",
         ran.stdout
     );

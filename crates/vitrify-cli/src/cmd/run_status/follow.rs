@@ -99,8 +99,19 @@ fn is_final(outcome: &str) -> bool {
 pub fn diff(prev: &Snapshot, next: &Snapshot, t: &mut Tracker, quiet_after: u64) -> Vec<RunEvent> {
     t.prime(prev, quiet_after);
     let mut events = Vec::new();
+    // in a run of several lanes, what a worker does names its lane
+    let multi = next.lanes.len() > 1;
     for w in &next.workers {
+        let from = events.len();
         worker_events(prev, next, w, t, quiet_after, &mut events);
+        if multi && !w.lane.is_empty() {
+            for e in &mut events[from..] {
+                e.fields.push(("lane".to_string(), J::s(w.lane.clone())));
+            }
+        }
+    }
+    if multi {
+        events.extend(lane_events(prev, next));
     }
 
     if next.state == RunState::Alive
@@ -121,6 +132,29 @@ pub fn diff(prev: &Snapshot, next: &Snapshot, t: &mut Tracker, quiet_after: u64)
         events.push(e);
     }
     events
+}
+
+/// `lane`: each lane whose recorded state changed between two looks, in
+/// `project.json` order.
+fn lane_events(prev: &Snapshot, next: &Snapshot) -> Vec<RunEvent> {
+    next.lanes
+        .iter()
+        .filter_map(|l| {
+            let before = prev.lanes.iter().find(|p| p.slug == l.slug)?;
+            (before.state != l.state).then(|| {
+                RunEvent::new(
+                    next.at,
+                    "lane",
+                    None,
+                    None,
+                    format!("{} → {}", before.state, l.state),
+                )
+                .with("from", J::s(before.state.clone()))
+                .with("lane", J::s(l.slug.clone()))
+                .with("to", J::s(l.state.clone()))
+            })
+        })
+        .collect()
 }
 
 /// The events of one worker between two looks.
@@ -334,7 +368,7 @@ fn human_text(e: &RunEvent, stage_of: Option<&str>) -> String {
     };
     match e.kind.as_str() {
         "dispatched" => format!("dispatched {}", e.detail),
-        "stage" | "gate" | "waiting" => e.detail.clone(),
+        "stage" | "gate" | "waiting" | "lane" => e.detail.clone(),
         "work" => match stage_of {
             Some(stage) => format!("{stage}  {}", e.detail),
             None => e.detail.clone(),
@@ -380,13 +414,24 @@ fn human_text(e: &RunEvent, stage_of: Option<&str>) -> String {
 
 /// One human line: `HH:MM:SS  <label>  <text>`, the label and the two
 /// spaces after it taking 10 columns, so the texts line up. A longer label
-/// still keeps its two spaces.
-fn human_line(e: &RunEvent, stage_of: Option<&str>) -> String {
-    let label = match (&e.unit, e.claim_seq) {
+/// still keeps its two spaces. In a run of several lanes (`multi`) the
+/// label of an event that names its lane starts with `[<lane>]`.
+fn human_line(e: &RunEvent, stage_of: Option<&str>, multi: bool) -> String {
+    let lane = match e.field("lane") {
+        Some(J::Str(l)) if multi && !l.is_empty() => Some(l.as_str()),
+        _ => None,
+    };
+    let base = match (&e.unit, e.claim_seq) {
         (Some(u), Some(seq)) => format!("{u} c{seq}"),
         (Some(u), None) => u.clone(),
         _ if e.kind == "gate" => "gate".to_string(),
+        _ if lane.is_some() => String::new(),
         _ => "run".to_string(),
+    };
+    let label = match lane {
+        Some(l) if base.is_empty() => format!("[{l}]"),
+        Some(l) => format!("[{l}] {base}"),
+        None => base,
     };
     format!(
         "{}  {label:<8}  {}",
@@ -400,6 +445,8 @@ fn human_line(e: &RunEvent, stage_of: Option<&str>) -> String {
 struct Printer<'a> {
     job: &'a str,
     json: bool,
+    /// Whether the run has several lanes, so that lines name theirs.
+    multi: bool,
 }
 
 impl Printer<'_> {
@@ -416,7 +463,7 @@ impl Printer<'_> {
             find(&|w| Some(&w.unit) == e.unit.as_ref() && Some(w.claim_seq) == e.claim_seq)
                 .map(|w| w.stage.as_str())
                 .filter(|s| RUNNING_STAGES.contains(s));
-        if !emit_checked(&human_line(e, stage_of)) {
+        if !emit_checked(&human_line(e, stage_of, self.multi)) {
             return false;
         }
         if e.kind == "run-died"
@@ -451,9 +498,11 @@ impl Printer<'_> {
 
 /// Follow the run `job` until it ends; returns the exit code.
 pub fn run(root: &Path, job: &str, args: &StatusArgs) -> Result<u8, CoreError> {
+    let logs_dir = root.join(".vitrify").join("logs").join(job);
     let out = Printer {
         job,
         json: args.json,
+        multi: super::snapshot::lane_dirs(&logs_dir).len() > 1,
     };
     let mut replayed_end = false;
     if args.since_start {
@@ -571,6 +620,7 @@ mod tests {
             pid: 4242,
             retry: false,
             worktree: format!(".vitrify/worktrees/{holder}"),
+            lane: String::new(),
             started_at: at(0).format(),
             ended_at: None,
             outcome: "running".to_string(),
@@ -604,6 +654,7 @@ mod tests {
             progress: Some("Progress: 1/2 Verified · 1 Claimed".to_string()),
             params: Params::default(),
             workers,
+            lanes: Vec::new(),
             gate: None,
             warnings: Vec::new(),
             logs: ".vitrify/logs/run-x/".to_string(),
@@ -864,9 +915,65 @@ mod tests {
         assert!(diff(&ended, &ended, &mut t, 300).is_empty());
     }
 
+    fn lane(slug: &str, state: &str) -> crate::cmd::run_status::snapshot::LaneView {
+        crate::cmd::run_status::snapshot::LaneView {
+            slug: slug.to_string(),
+            root: format!("specs/{slug}"),
+            state: state.to_string(),
+            verified: Some(0),
+            total: Some(2),
+            in_flight: 0,
+            waiting: Some(2),
+            waits_on: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_lane_changing_state_is_said_and_names_its_lane() {
+        let mut first = snap(0, vec![]);
+        first.lanes = vec![lane("api", "idle"), lane("core", "build")];
+        let mut t = Tracker::new(&first);
+        let mut next = snap(5, vec![]);
+        next.lanes = vec![lane("api", "build"), lane("core", "build")];
+        let ev = diff(&first, &next, &mut t, 300);
+        assert_eq!(kinds(&ev), ["lane"]);
+        assert_eq!(
+            json(&ev[0]),
+            r#"{"at": "2027-01-15T08:00:05Z", "event": "lane", "unit": null, "claim_seq": null, "detail": "idle \u2192 build", "from": "idle", "lane": "api", "to": "build"}"#
+        );
+        assert_eq!(
+            human_line(&ev[0], None, true),
+            "08:00:05  [api]     idle → build"
+        );
+        assert!(diff(&next, &next, &mut t, 300).is_empty());
+
+        // an attempt in a lane says which
+        let mut w = worker("run-x-w1", "reading");
+        w.lane = "core".to_string();
+        let mut with = snap(10, vec![w]);
+        with.lanes = next.lanes.clone();
+        let ev = diff(&next, &with, &mut t, 300);
+        assert_eq!(kinds(&ev), ["dispatched"]);
+        assert_eq!(ev[0].field("lane"), Some(&J::s("core")));
+        assert_eq!(
+            human_line(&ev[0], None, true),
+            "08:00:00  [core] U-001 c1  dispatched → w1"
+        );
+        // and a single lane's lines stay as they were
+        assert_eq!(
+            human_line(&ev[0], None, false),
+            "08:00:00  U-001 c1  dispatched → w1"
+        );
+        let mut solo = snap(15, vec![]);
+        solo.lanes = vec![lane("api", "build")];
+        let mut after = snap(20, vec![]);
+        after.lanes = vec![lane("api", "complete")];
+        assert!(diff(&solo, &after, &mut t, 300).is_empty());
+    }
+
     #[test]
     fn human_lines_line_up_and_say_each_kind_plainly() {
-        let line = |e: RunEvent| human_line(&e, Some("editing"));
+        let line = |e: RunEvent| human_line(&e, Some("editing"), false);
         let u = Some("U-003");
         let cases = [
             (

@@ -22,7 +22,7 @@ Use this list to find which source governs a question.
 
 ### 1.2 Schema Version
 
-Every SDD declares `schema_version` in its core front matter — the bundle's `sdd.md`, or the single file. This vitrify reads exactly one version, `2.0` (written `2`, `2.0`, or `2.0.x`). A missing key or any other value is refused with exit 4, and the message names the version this vitrify reads; `vitrify locate` still lists the refused SDD, so it is seen. Templates that `vitrify new sdd` materializes declare `2.0`. When the version changes is set out in [§10 Versioning](#10-versioning).
+Every SDD declares `schema_version` in its core front matter — the bundle's `sdd.md`, or the single file. This vitrify reads two versions: `2.0` (written `2`, `2.0`, or `2.0.x`) and `2.1` (written `2.1` or `2.1.x`). In 2.1 a unit's `depends_on` may name a pin of its own SDD, to wait for the units that produce the pinned contract in another SDD; every 2.0 document means the same under 2.1, and a pin in a 2.0 SDD's `depends_on` is a lint L1 finding. A missing key or any other value is refused with exit 4, and the message names the versions this vitrify reads; `vitrify locate` still lists the refused SDD, so it is seen. Templates that `vitrify new sdd` materializes declare `2.1`. When the version changes is set out in [§10 Versioning](#10-versioning).
 
 ## 2. Instance Shapes and Discovery
 
@@ -44,13 +44,21 @@ Unit front matter carries: `unit`, `title`, `status` (`Draft|Ready|Claimed|Built
 
 The volatile fields — `status`, `claimed_by`, `claim_expires`, `claim_seq`, `built`, `verified`, and `trace` — are the fields vitrify writes. The trace recipe masks them (§4), and the reading-set budget leaves them out (§5).
 
-### 3.3 Contracts, Change Entries, and Questions
+### 3.3 SDD Front Matter: `shared_inputs`
+
+The core front matter may carry one optional key beyond the unit fields' own: `shared_inputs`, a list of repository-relative paths or globs. It declares which paths outside every SDD's `scope_roots` the SDD's commands read, and so which of them re-check its units. A missing key means every outside path is an input of every unit; a present key, even an empty list, means only the outside paths it matches are. The key is read by the re-check cascade alone (§6); it is not a trace input, and no lint check reads it. Why a repository declares it is in [Build State](../about/concepts/build-state.md#what-a-unit-is-checked-against).
+
+```yaml
+shared_inputs: [tools/, ci/shared.env]
+```
+
+### 3.4 Contracts, Change Entries, and Questions
 
 A contract's header is the bullet lines between its title and its first section heading: `Producer:`, `Consumers:`, `Stability:`, and, on a pin, `Pin:`. Its body runs from its `Surface` heading to its end. A change entry is a heading that begins `CH-###`, with its date in parentheses and the version it goes to after `→`; a question is a `- **Q-###** (…)` entry of the Decision Log, open unless that parenthesis says `resolved`.
 
-### 3.4 Claimable Predicate
+### 3.5 Claimable Predicate
 
-**Claimable predicate** (derived, never stored): all `depends_on` ∈ {Built, Verified}, AND (status ∈ {Ready, Stale} OR (Claimed with lease lapsed)). Lease expiry is advisory; the fencing token is the correctness mechanism [locking].
+**Claimable predicate** (derived, never stored): every `depends_on` entry is built — a unit entry is Built or Verified, and a pin entry (schema 2.1) stands for the units named on its authority's `Producer:` line, each of which must be Built or Verified — AND (status ∈ {Ready, Stale} OR (Claimed with lease lapsed)). Lease expiry is advisory; the fencing token is the correctness mechanism [locking].
 
 ## 4. Trace Hash Recipe
 
@@ -78,7 +86,7 @@ The budget totals these bytes against `lint.readset_budget_bytes` (default 65,53
 
 ## 6. Journal
 
-**Journal:** append-only NDJSON, one compact object per line (separators `(",", ":")`, non-ASCII unescaped), fixed key order `seq, at, event, [unit], [actor], [claim_seq], [entry], [stale], [cause], [findings], sdd, [commit]`; `event` is the closed vocabulary `{claim, renew, release, built, verified, stale, retired, change, audit}`; appended only inside commits that land on mainline, never rewritten. Replay projects events to expected unit states and `vitrify journal replay` compares the projection against front matter — event-sourcing replay as the audit: "discard the application state completely and rebuild it by re-running the events" [fowler].
+**Journal:** append-only NDJSON, one compact object per line (separators `(",", ":")`, non-ASCII unescaped), fixed key order `seq, at, event, [unit], [actor], [claim_seq], [entry], [stale], [cause], [findings], [suite], sdd, [commit]`; `event` is the closed vocabulary `{claim, renew, release, built, verified, stale, retired, change, audit}`; appended only inside commits that land on mainline, never rewritten. Two optional marks keep the vocabulary closed: a `verified` event may carry actor `recheck` (a unit that was already Verified had its Verification rows run again and passed; replay is unchanged), and an `audit` event may carry `suite` (`pass`: the §5 Test command passed at that commit). The commit of a unit's latest `verified` event, and of the latest `suite: pass` audit event, are the anchors the re-check cascade measures changes from. Replay projects events to expected unit states and `vitrify journal replay` compares the projection against front matter — event-sourcing replay as the audit: "discard the application state completely and rebuild it by re-running the events" [fowler].
 
 Use this table to read an event's fields, which appear in the fixed order listed.
 
@@ -88,16 +96,19 @@ Use this table to read an event's fields, which appear in the fixed order listed
 | `at` | always | the UTC time of the append, ISO 8601 |
 | `event` | always | one of `claim`, `renew`, `release`, `built`, `verified`, `stale`, `retired`, `change`, `audit` |
 | `unit` | every kind except `change` and `audit` | the unit ID |
-| `actor` | when given | the holder, `audit`, or another named actor |
+| `actor` | when given | the holder, `audit`, `recheck` (a `verified` event of a re-check), or another named actor |
 | `claim_seq` | when given | the claim number the event belongs to |
 | `entry` | `change` | the change entry, `CH-###` |
 | `stale` | `change` | the units the change entry marks Stale |
 | `cause` | `stale` | why the unit went Stale |
 | `findings` | `audit` | the audit's finding count |
+| `suite` | `audit`, optional | `pass`: the SDD's §5 Test command passed at the event's `commit`; it follows `findings` and precedes `sdd` |
 | `sdd` | always | the SDD's version when the event was appended |
 | `commit` | when given | the relevant commit, as a short SHA |
 
-Replay projects each event onto unit state: `claim` → Claimed with its `claim_seq`; `release` → Ready; `built`, `verified`, `stale`, and `retired` → that status; `change` → Stale for each listed unit; `renew` and `audit` change nothing. Units with no events must be Draft or Ready, and unknown events and non-increasing `seq` values are findings. An example event:
+A re-check that passes is recorded in one commit, `sdd: re-check <units> at <commit>` (`sdd: re-check the suite at <commit>` when only the Test command ran). The commit appends a `verified` event with actor `recheck` and the checked commit for each unit that passed, rewrites each such unit's `verified:` stamp, regenerates the ledger, and, when the Test command passed, ends with an `audit` event that carries `suite: pass`. A unit whose rows failed gets nothing, and neither does an interrupted batch; failures are never recorded. The stamp is a volatile field, so no trace moves (§4). The `verified` event is the unit's anchor.
+
+Replay projects each event onto unit state: `claim` → Claimed with its `claim_seq`; `release` → Ready; `built`, `verified` (a re-check's included: Verified stays Verified), `stale`, and `retired` → that status; `change` → Stale for each listed unit; `renew` and `audit` change nothing. Units with no events must be Draft or Ready, and unknown events and non-increasing `seq` values are findings. An example event:
 
 ```json
 {"seq":41,"at":"2026-10-24T09:12:00Z","event":"claim","unit":"U-009","actor":"imp-7","claim_seq":3,"sdd":"1.4.0","commit":"8c1d2e9"}
@@ -176,7 +187,7 @@ The **escalation verdict** is a single JSON object, `{"verdict":"retry|release|b
 These rules say what a release may change and how the formats on this page tell versions apart.
 
 - **vitrify is at 0.y.z.** Any release may change any command, flag, output, exit code, file format, or state file, with no deprecation period, no alias, and no step that carries an older file forward [semver-web] [unreleased-api]. Agents learn the interface from the installed binary in each session, so a release leaves no stale copy of it behind [poehnelt].
-- **`schema_version` is required in every SDD** (§1.2). A vitrify reads exactly one schema version and refuses any other with exit 4, naming the version it reads; `vitrify locate` lists the refused SDD.
+- **`schema_version` is required in every SDD** (§1.2). A vitrify reads the schema versions it names (this one: 2.0 and 2.1) and refuses any other with exit 4, naming the versions it reads; `vitrify locate` lists the refused SDD.
 - **A change to the document format or to the trace recipe raises `schema_version`** and regenerates the golden corpus in the same reviewed change. An unintended change to either is a bug, which the goldens catch.
 - **State under `~/.vitrify/` belongs to the installed version.** Unmodified content refreshes through the manifest; a file this version cannot read is an error that names the command that rewrites it.
 - **The [Release Notes](../about/release-notes.md) say briefly what each release changed.** No other page carries change history [ecs-changelog] [intel-spec-update].
@@ -191,7 +202,7 @@ Use this list to avoid reading more into the formats than they promise.
 - **Not YAML.** Front matter is read by the yamlish parser (§3.1); a full YAML reader would normalize what the hashes cover (RA-7).
 - **Not cross-SDD except through a pin.** A reading set leaves its own SDD only to read the body a pin stands for, and only against a matching hash (§8.1); nothing else in it, and nothing its trace covers, lies outside the SDD.
 - **Not versioned per output.** JSON output carries no format version of its own; each verb's `--help` documents the shape the installed version prints (§10). A per-output version — cargo's "It is recommended to include the `--format-version` flag to future-proof your code" [cargo-metadata] — is the mechanism to weigh at release status, with the deprecation policy.
-- **Not a run log.** `.vitrify/run.json`, the gate's progress file `.vitrify/logs/<job>/gate.json`, the event log `.vitrify/logs/<job>/events.jsonl`, the final report `.vitrify/logs/<job>/report.txt`, and the worker logs are observability only and are not part of this specification; vitrify never decides anything from them.
+- **Not a run log.** `.vitrify/run.json`, the gate's progress file `.vitrify/logs/<job>/gate.json`, the event log `.vitrify/logs/<job>/events.jsonl`, the final report `.vitrify/logs/<job>/report.txt`, a project run's plan record `.vitrify/logs/<job>/project.json` and its per-lane records under `.vitrify/logs/<job>/<slug>/`, and the worker logs are observability only and are not part of this specification; vitrify never decides anything from them.
 - **Not hand-editable.** The ledger is derived and the journal is append-only; change neither except through the state verbs.
 
 ## 12. Reference Implementations
@@ -204,6 +215,8 @@ Use this table to find the code that implements each format and the oracle files
 | Trace (§4) | `crates/vitrify-core/src/trace.rs` | `fixtures/golden/calc/trace-U-*.json` |
 | Reading set (§5) | `crates/vitrify-core/src/readset.rs` | `fixtures/golden/calc/readset-U-*.json`, `fixtures/golden/pin-multi/readset-*.json` |
 | Journal (§6) | `crates/vitrify-core/src/journal.rs` | `fixtures/golden/calc/replay.json` |
+| Anchors, dirty sets, and `shared_inputs` (§3.3, §6) | `crates/vitrify-core/src/cascade.rs` | `fixtures/seeded/project-cascade/` |
+| The unit graph across SDDs (§1.2, §3.5) | `crates/vitrify-core/src/graph.rs` | `fixtures/seeded/project-pipeline/`, `fixtures/seeded/project-cycle/`, `fixtures/seeded/project-schema20/` |
 | Ledger (§7) | `crates/vitrify-core/src/ledger.rs` | `fixtures/golden/calc/ledger.md`, `fixtures/golden/calc/progress.txt` |
 | External contracts (§8) | `crates/vitrify-core/src/contract.rs` | `fixtures/seeded/pin-multi/`, `fixtures/golden/pin-multi/` |
 | Audit findings | `crates/vitrify-core/src/audit.rs` | `fixtures/golden/calc/audit.json`, `fixtures/seeded/audit-*/` |
