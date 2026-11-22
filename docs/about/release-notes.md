@@ -4,6 +4,21 @@
 
 Use this page to see what a release changed. Each entry gives the version, its date, one sentence and the changes; the repository's git history is the complete record. vitrify is at 0.y.z, so any release may change any command, output or format — [Versioning](../reference/formats.md#10-versioning) gives the rule.
 
+## Release 0.7.0
+
+2026-11-22
+
+0.7.0 builds every SDD in a repository as one incremental, concurrent project run, critical path first.
+
+- With several SDDs and no `--sdd`, `vitrify run` is a project run: every Active SDD is a lane with its own integration checkout, and one scheduler dispatches across them from one worker pool, critical path first. `--sdd <root>` builds one SDD; `--upstream` adds the SDDs it depends on. `--dry-run` prints the plan and its critical path.
+- Schema 2.1: a unit's `depends_on` may name a pin, to wait for the units that produce the pinned contract in another SDD. This vitrify reads 2.0 and 2.1, and `vitrify new sdd` writes 2.1. A project run refuses (exit 4) while an SDD whose units consume pins is at 2.0; migrating is one PATCH change entry.
+- Re-checks, not rebuilds: a code change re-checks, with no model call, only the Verified units that depend on it, in any SDD. A passing re-check is published as a `verified` event with actor `recheck`, and an SDD's passing suite as `suite: pass` on its `audit` event. An optional `shared_inputs` front-matter key limits which paths outside every SDD's scope re-check its units. `vitrify run --recheck` distrusts every recorded check.
+- A Built attempt whose worker is gone and whose trace still matches is adopted and sent straight to the gate, with no worker session.
+- New: lint L12 checks the unit graph across SDDs. `vitrify locate --graph` shows the SDD graph; `vitrify check` lists dirty units.
+- A run's logs gain `project.json`, and each lane's gate, worker and escalation files move to `.vitrify/logs/<job>/<slug>/`.
+- `run.worker_cap` defaults to 20, up from 4.
+- New: `authoring.approval` (`VITRIFY_AUTHORING_APPROVAL`). `"agent"` lets the agent approve a TDD or its revision in `vitrify brief authoring` and `change` once the SDD-readiness checklist passes; `"human"`, the default, keeps sign-off with the human.
+
 ## Release 0.6.0
 
 2026-11-18

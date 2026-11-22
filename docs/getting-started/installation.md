@@ -21,7 +21,7 @@ Check these before installing. The [Support Matrix](../reference/support-matrix.
 Install the version these docs describe from crates.io, where vitrify is published as [`vitrify-cli`](https://crates.io/crates/vitrify-cli); the binary it installs is `vitrify`.
 
 ```sh
-cargo install vitrify-cli --version 0.6.0 --locked
+cargo install vitrify-cli --version 0.7.0 --locked
 ```
 
 Install `vitrify-cli` by that name: the crate named `vitrify` on crates.io is an unrelated project. `--locked` builds with the exact dependency versions the release was published with. cargo places the binary in `~/.cargo/bin`, which must be on your `PATH`. Everything vitrify shares across repositories lives under `~/.vitrify`.
@@ -49,7 +49,7 @@ vitrify --version
 ```
 
 ```text
-vitrify 0.6.0
+vitrify 0.7.0
 ```
 
 Then set the machine up, once. `vitrify init` creates `~/.vitrify/`, and no other command does:
@@ -61,7 +61,7 @@ vitrify init
 `init` writes `~/.vitrify/config.toml` with every setting at its default, checks git, probes each harness CLI on your `PATH`, materializes the briefs, schemas and templates, probes each harness role, and records what works in `config.toml`, printing one `status: text` line per check. With only Claude Code installed, the output looks like this, where `<version>` is your git version:
 
 ```text
-ok: vitrify version 0.6.0
+ok: vitrify version 0.7.0
 ok: created ~/.vitrify/config.toml with every setting at its default
 ok: git present (git version <version>)
 ok: harness claude: headless = claude -p --output-format stream-json --verbose

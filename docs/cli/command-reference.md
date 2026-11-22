@@ -566,7 +566,7 @@ vitrify brief build-unit --unit U --holder H [--sdd <root>]
 Prints vitrify's procedures — one task each, in this binary's version — from `~/.vitrify/briefs/<task>.md` (an override on disk wins). With no task it prints the procedure index and exits 0:
 
 ```text
-vitrify 0.6.0 procedures — print one with: vitrify brief <task>
+vitrify 0.7.0 procedures — print one with: vitrify brief <task>
 
   onboard     take a repository from nothing to ready-to-build, or name the gaps     session
   authoring   a PRD to an Approved TDD and an Active, lint-clean SDD                 session
