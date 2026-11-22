@@ -1,6 +1,7 @@
 //! `vitrify brief`: the procedure index, every task printed with the
-//! binary's version filled in and no slot left open, and `brief run`'s
-//! status-check interval from configuration. Every test forces
+//! binary's version filled in and no slot left open, `brief run`'s
+//! status-check interval from configuration, and who approves a TDD in
+//! `brief authoring` and `brief change` (`authoring.approval`). Every test forces
 //! VITRIFY_HOME to a temp dir — the suite never touches the real ~/.vitrify.
 
 use std::path::{Path, PathBuf};
@@ -64,6 +65,7 @@ fn vitrify(env: &Env, args: &[&str]) -> Output {
     c.current_dir(&env.cwd)
         .env("VITRIFY_HOME", &env.home)
         .env_remove("VITRIFY_RUN_STATUS_CHECK_SECONDS")
+        .env_remove("VITRIFY_AUTHORING_APPROVAL")
         .args(args);
     c.output().unwrap()
 }
@@ -215,6 +217,155 @@ fn an_invalid_status_check_interval_exits_2_naming_the_key() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("run.status_check_seconds"), "{err}");
     assert!(err.contains("config.toml"), "{err}");
+}
+
+/// The sign-off sentences as the briefs have always read them: what
+/// `authoring.approval = "human"` prints, byte for byte.
+const HUMAN_SIGN_OFF: [(&str, &str); 5] = [
+    (
+        "authoring",
+        "Repeat until §1–§6 can be written. The human approves the TDD, or its\nrevision; you do not.",
+    ),
+    (
+        "authoring",
+        "named rejected alternatives. The human drives it to **Approved** with a\npinnable revision identifier.",
+    ),
+    (
+        "change",
+        "before editing anything. Show it to the human when the\nchange is theirs to approve.",
+    ),
+    (
+        "change",
+        "until the revision can be written. The human approves the revision before\nany SDD text changes; you do not.",
+    ),
+    (
+        "change",
+        "* Mark a TDD revision Approved: the human approves it.",
+    ),
+];
+
+/// What `authoring.approval = "agent"` prints in their place.
+const AGENT_SIGN_OFF: [(&str, &str); 5] = [
+    (
+        "authoring",
+        "Repeat until §1–§6 can be written. Approval is delegated to you\n(`authoring.approval = \"agent\"`): you approve the TDD, or its revision,\nyourself, at the gate in §2.",
+    ),
+    (
+        "authoring",
+        "named rejected alternatives. You drive it to **Approved** with a\npinnable revision identifier: when every other line of the gate below\npasses, set the TDD's Status to Approved and bump its Revision yourself.",
+    ),
+    (
+        "change",
+        "before editing anything. Approval is delegated to you\n(`authoring.approval = \"agent\"`): go on once the list checks out.",
+    ),
+    (
+        "change",
+        "until the revision can be written. You approve the revision before\nany SDD text changes: run it through the SDD-readiness checklist\n(`vitrify schema show --tdd`) line by line; when every other line passes,\nset its Status to Approved and bump its Revision yourself. If any line\nfails, stop and sharpen that line rather than approve.",
+    ),
+    (
+        "change",
+        "* Mark a TDD revision Approved before every other line of the\n  SDD-readiness checklist passes.",
+    ),
+];
+
+fn brief_with(env: &Env, task: &str, approval: Option<&str>) -> Output {
+    let mut c = Command::cargo_bin("vitrify").unwrap();
+    c.current_dir(&env.cwd)
+        .env("VITRIFY_HOME", &env.home)
+        .env_remove("VITRIFY_AUTHORING_APPROVAL")
+        .args(["brief", task]);
+    if let Some(v) = approval {
+        c.env("VITRIFY_AUTHORING_APPROVAL", v);
+    }
+    c.output().unwrap()
+}
+
+/// Which sign-off the authoring and change briefs print: every sentence of
+/// one set, none of the other.
+fn assert_sign_off(env: &Env, approval: Option<&str>, agent: bool) {
+    let (want, not) = if agent {
+        (AGENT_SIGN_OFF, HUMAN_SIGN_OFF)
+    } else {
+        (HUMAN_SIGN_OFF, AGENT_SIGN_OFF)
+    };
+    for task in ["authoring", "change"] {
+        let body = stdout(&brief_with(env, task, approval));
+        for (_, text) in want.iter().filter(|(t, _)| *t == task) {
+            assert!(
+                body.contains(text),
+                "{task}, agent={agent}: missing {text:?}\n{body}"
+            );
+        }
+        for (_, text) in not.iter().filter(|(t, _)| *t == task) {
+            assert!(!body.contains(text), "{task}, agent={agent}: has {text:?}");
+        }
+        assert_eq!(open_slots(&body), Vec::<String>::new(), "{task}");
+    }
+}
+
+#[test]
+fn approval_human_prints_the_sign_off_as_it_always_read() {
+    let env = setup(false);
+    // the default
+    assert_sign_off(&env, None, false);
+    // and said out loud
+    assert_sign_off(&env, Some("human"), false);
+}
+
+#[test]
+fn approval_agent_delegates_the_sign_off_to_the_agent() {
+    let env = setup(false);
+    assert_sign_off(&env, Some("agent"), true);
+}
+
+#[test]
+fn approval_resolves_env_over_repo_config_over_home_config() {
+    let env = setup(false);
+    // the home config file
+    let home_cfg = env.home.join("config.toml");
+    let shipped = std::fs::read_to_string(&home_cfg).unwrap();
+    assert!(shipped.contains("approval = \"human\""), "{shipped}");
+    std::fs::write(
+        &home_cfg,
+        shipped.replacen("approval = \"human\"", "approval = \"agent\"", 1),
+    )
+    .unwrap();
+    assert_sign_off(&env, None, true);
+    // the repository's config file over it
+    std::fs::create_dir_all(env.cwd.join(".vitrify")).unwrap();
+    std::fs::write(
+        env.cwd.join(".vitrify/config.toml"),
+        "[authoring]\napproval = \"human\"\n",
+    )
+    .unwrap();
+    assert_sign_off(&env, None, false);
+    // the environment over both
+    assert_sign_off(&env, Some("agent"), true);
+}
+
+#[test]
+fn an_invalid_approval_exits_2_naming_the_key_and_its_file() {
+    let env = setup(false);
+    for task in ["authoring", "change"] {
+        let out = brief_with(&env, task, Some("auto"));
+        assert_eq!(out.status.code(), Some(2), "{task}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("VITRIFY_AUTHORING_APPROVAL"), "{err}");
+        assert!(err.contains("authoring.approval"), "{err}");
+    }
+    std::fs::create_dir_all(env.cwd.join(".vitrify")).unwrap();
+    std::fs::write(
+        env.cwd.join(".vitrify/config.toml"),
+        "[authoring]\napproval = \"robot\"\n",
+    )
+    .unwrap();
+    for task in ["authoring", "change"] {
+        let out = brief_with(&env, task, None);
+        assert_eq!(out.status.code(), Some(2), "{task}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("authoring.approval"), "{err}");
+        assert!(err.contains(".vitrify/config.toml"), "{err}");
+    }
 }
 
 /// `vitrify init` with no harness CLI on PATH: the home is set up — every

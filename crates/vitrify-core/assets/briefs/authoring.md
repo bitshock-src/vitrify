@@ -29,8 +29,7 @@ becomes a new TDD and SDD, with its own `sdd:` slug and disjoint
 targeted questions**, each aimed at a TDD section (§1–§6) that the PRD
 leaves open. Write each answer into the TDD, in the section it decides. Record
 what is still unknown as an open question in the TDD — never a guess.
-Repeat until §1–§6 can be written. The human approves the TDD, or its
-revision; you do not.
+Repeat until §1–§6 can be written. {approval_interview}
 
 ## 2. Write the TDD — the design authority
 
@@ -39,8 +38,7 @@ any predictable path) and fill §1–§6 from the interview: problem/goals/non-g
 a component diagram with **every cross-component edge named** (each edge
 becomes exactly one SDD contract), exact schemas and algorithms,
 cross-cutting constraints with numeric thresholds, rollout ordering, and
-named rejected alternatives. The human drives it to **Approved** with a
-pinnable revision identifier.
+named rejected alternatives. {approval_tdd}
 
 **Gate**: the SDD-readiness checklist at the end of the TDD schema
 (`vitrify schema show --tdd`), line by line, pass/fail. A TDD that fails it

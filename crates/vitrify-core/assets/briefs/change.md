@@ -24,14 +24,12 @@ List what the change touches: the SDDs, their roots and `scope_roots`
 (`vitrify pin list --all`); and the TDD revisions involved. For **more than one SDD**, write the
 list of changes first: which SDD gets which entry and bump, producers before consumers.
 Check it against those two listings — every SDD named exists, every pin it
-expects is listed — before editing anything. Show it to the human when the
-change is theirs to approve.
+expects is listed — before editing anything. {approval_change_list}
 
 A change that revises the TDD — a PRD for a feature inside an SDD's scope,
 a new design decision — starts with the interview of
 `vitrify brief authoring` §1: rounds of at most five targeted questions,
-until the revision can be written. The human approves the revision before
-any SDD text changes; you do not.
+until the revision can be written. {approval_revision}
 
 ## 2. Each SDD, producers first
 
@@ -144,7 +142,7 @@ order. A build that is going picks the commit up by itself.
   `change apply`.
 * Mark one SDD's units from another SDD's entry.
 * Decide a design question yourself: record a `Q-###` and hand it back.
-* Mark a TDD revision Approved: the human approves it.
+* {approval_never}
 
 ## Report
 

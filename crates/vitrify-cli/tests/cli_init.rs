@@ -120,7 +120,7 @@ fn init_writes_every_default_then_the_first_probe() {
     );
     let table: toml::Table = toml_text.parse().unwrap();
     assert_eq!(table["schema"].as_integer(), Some(1));
-    assert_eq!(table["run"]["worker_cap"].as_integer(), Some(4));
+    assert_eq!(table["run"]["worker_cap"].as_integer(), Some(20));
     assert_eq!(
         table["lint"]["readset_budget_bytes"].as_integer(),
         Some(65536)
@@ -146,7 +146,7 @@ fn init_refuses_a_home_it_already_set_up() {
     let env = setup();
     vitrify(&env).arg("init").assert().success();
     let mut edited = config_toml(&env);
-    edited = edited.replacen("worker_cap = 4", "worker_cap = 7", 1);
+    edited = edited.replacen("worker_cap = 20", "worker_cap = 7", 1);
     std::fs::write(env.home.join("config.toml"), &edited).unwrap();
 
     vitrify(&env)
@@ -420,7 +420,7 @@ fn probe_asks_and_applies_on_yes_keeping_every_setting() {
     // a setting edited by hand, comment and all
     let shipped = config_toml(&env);
     let edited = shipped.replacen(
-        "worker_cap = 4                 # max concurrent workers",
+        "worker_cap = 20                # max concurrent workers",
         "worker_cap = 7 # mine",
         1,
     );

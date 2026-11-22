@@ -5,7 +5,9 @@
 //! unit's resolved reading set inlined.
 //!
 //! Every brief names the binary's version (`{version}`); `brief run` also
-//! names the configured status-check interval (`{status_check_seconds}`).
+//! names the configured status-check interval (`{status_check_seconds}`),
+//! and `brief authoring` / `brief change` say who approves a TDD
+//! (`{approval_*}`, from `authoring.approval`: [`APPROVAL_SLOTS`]).
 //!
 //! Every path a brief names is the real one for this repository: `{sdd}` is
 //! the SDD's root relative to the checkout (so `--sdd {sdd}` works from the
@@ -16,7 +18,7 @@
 use std::path::Path;
 
 use vitrify_core::CoreError;
-use vitrify_core::config::Overrides;
+use vitrify_core::config::{Approval, Overrides};
 use vitrify_core::model::{self, Instance};
 use vitrify_core::readset;
 
@@ -31,6 +33,63 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Shown in place of the worktree root when it cannot be resolved (outside
 /// a git repository, or with no vitrify home).
 const NO_WORKTREES: &str = "<worktrees>";
+
+/// The sign-off sentences of the authoring and change briefs: per slot, the
+/// text for `authoring.approval = "human"` — the wording the briefs always
+/// had — and for `"agent"`, where approval is delegated to the agent that
+/// follows the brief. Each text continues the line its slot starts on.
+pub const APPROVAL_SLOTS: &[(&str, &str, &str)] = &[
+    // authoring §1, after the interview
+    (
+        "{approval_interview}",
+        "The human approves the TDD, or its\nrevision; you do not.",
+        "Approval is delegated to you\n(`authoring.approval = \"agent\"`): you approve the TDD, or its revision,\n\
+         yourself, at the gate in §2.",
+    ),
+    // authoring §2, driving the TDD to Approved
+    (
+        "{approval_tdd}",
+        "The human drives it to **Approved** with a\npinnable revision identifier.",
+        "You drive it to **Approved** with a\npinnable revision identifier: when every other line of the gate below\n\
+         passes, set the TDD's Status to Approved and bump its Revision yourself.",
+    ),
+    // change §1, the list of changes
+    (
+        "{approval_change_list}",
+        "Show it to the human when the\nchange is theirs to approve.",
+        "Approval is delegated to you\n(`authoring.approval = \"agent\"`): go on once the list checks out.",
+    ),
+    // change §1, a TDD revision
+    (
+        "{approval_revision}",
+        "The human approves the revision before\nany SDD text changes; you do not.",
+        "You approve the revision before\nany SDD text changes: run it through the SDD-readiness checklist\n\
+         (`vitrify schema show --tdd`) line by line; when every other line passes,\n\
+         set its Status to Approved and bump its Revision yourself. If any line\n\
+         fails, stop and sharpen that line rather than approve.",
+    ),
+    // change, Never
+    (
+        "{approval_never}",
+        "Mark a TDD revision Approved: the human approves it.",
+        "Mark a TDD revision Approved before every other line of the\n  \
+         SDD-readiness checklist passes.",
+    ),
+];
+
+/// Fill the sign-off slots for `approval`. A brief without them — an
+/// override written before they existed — is left as it is.
+pub fn fill_approval(body: &str, approval: Approval) -> String {
+    APPROVAL_SLOTS
+        .iter()
+        .fold(body.to_string(), |body, (slot, human, agent)| {
+            let text = match approval {
+                Approval::Human => human,
+                Approval::Agent => agent,
+            };
+            body.replace(slot, text)
+        })
+}
 
 pub fn run(
     phase: Option<BriefPhase>,
@@ -87,6 +146,10 @@ pub fn run(
                     "{status_check_seconds}",
                     &cfg.run.status_check_seconds.to_string(),
                 );
+            }
+            if matches!(phase, BriefPhase::Authoring | BriefPhase::Change) {
+                let cfg = super::load_config(&Overrides::default())?;
+                body = fill_approval(&body, cfg.authoring.approval);
             }
             let worktrees = here_layout()
                 .map(|l| l.wt_root.display().to_string())

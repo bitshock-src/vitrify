@@ -1,12 +1,12 @@
 # Configuration
 
-> Configure vitrify's run, harness, and lint settings in `~/.vitrify/config.toml`, their precedence and environment variables, and the embedded content you can override.
+> Configure vitrify's run, authoring, harness, and lint settings in `~/.vitrify/config.toml`, their precedence and environment variables, and the embedded content you can override.
 
 Use this page to change how vitrify behaves on your machine or in one repository. All of vitrify's configuration lives in one file, `~/.vitrify/config.toml`, which `vitrify init` writes with every setting at its default; edit it in place, and an upgrade never changes it. The same file holds the per-role models and effort, its `[harness.<name>]` tables, described in [Harness CLIs](harnesses.md#configure-role-profiles), and the probe record, its `[probe]` tables, which `vitrify init` and `vitrify probe` write. Correctness never depends on `[run]` values: lease expiry is advisory; the fencing token (`claim_seq`, carried in branch names `sdd/<sdd>/<unit>/c<seq>`) is the mechanism, checked at the integration gate. They tune throughput.
 
 ## config.toml Example
 
-Configuration is TOML at `~/.vitrify/config.toml`. A repository may add its own `.vitrify/config.toml` that overrides any of it for that repository — `mainline`, `[run]`, `[lint]`, `[harness]` and the role profiles, key by key — and declares its own `schema`. Only the `[probe]` tables are refused there: they describe the machine, and `vitrify init` and `vitrify probe` write them. This example shows every setting at its default, as `vitrify init` writes it:
+Configuration is TOML at `~/.vitrify/config.toml`. A repository may add its own `.vitrify/config.toml` that overrides any of it for that repository — `mainline`, `[run]`, `[authoring]`, `[lint]`, `[harness]` and the role profiles, key by key — and declares its own `schema`. Only the `[probe]` tables are refused there: they describe the machine, and `vitrify init` and `vitrify probe` write them. This example shows every setting at its default, as `vitrify init` writes it:
 
 ```toml
 schema = 1                     # the file format version; must be 1
@@ -15,7 +15,7 @@ mainline = ""                  # mainline branch; "" = the primary checkout's
                                #   branch, else origin/HEAD, then main or master
 
 [run]
-worker_cap = 4                 # max concurrent workers
+worker_cap = 20                # max concurrent workers
 lease_minutes = 60             # claim lease
 renew_fraction = 0.25          # renew when remaining < fraction × lease
 abort_failed_waves = 2         # failed attempts of one unit before the
@@ -32,6 +32,11 @@ worktree_dir = ""              # "" = ~/.vitrify/worktrees/<repo>-<hash>;
                                #   relative = from the repository root
 status_check_seconds = 270     # how often an agent operating a run checks
                                #   `vitrify run status` when it cannot be notified
+
+[authoring]
+approval = "human"             # who approves a TDD or its revision in
+                               #   `vitrify brief authoring|change`: "human", or
+                               #   "agent" once the SDD-readiness checklist passes
 
 [lint]
 readset_budget_bytes = 65536   # per-unit reading-set budget (bytes by design)
@@ -51,7 +56,7 @@ Use this table to look up each setting, its default, and its override.
 | --- | --- | --- |
 | `schema` | `1` | The file format version, in `~/.vitrify/config.toml` and in a repository's `.vitrify/config.toml` alike. This vitrify reads version 1 and refuses any other value. |
 | `mainline` | `""` | The mainline branch. Empty resolves it in order: the primary checkout's current branch, then `origin/HEAD` (when the checkout is detached), then `main` or `master` — so a run started or resumed from a checkout on a build branch publishes to that branch. Overridden by `--mainline` and `VITRIFY_MAINLINE`. |
-| `run.worker_cap` | `4` | Maximum concurrent model sessions, across every lane of a run. Overridden by `--cap`. A single-file SDD's lane always runs one worker. |
+| `run.worker_cap` | `20` | Maximum concurrent model sessions, across every lane of a run. Overridden by `--cap`. A single-file SDD's lane always runs one worker. |
 | `run.lease_minutes` | `60` | The claim lease that `vitrify run` and generated worker prompts use. `vitrify claim` and `renew` do not read it; they take `--lease-minutes` (default 60). |
 | `run.renew_fraction` | `0.25` | Renew a worker's lease when less than this fraction of it remains. |
 | `run.abort_failed_waves` | `2` | Failed attempts of one unit before the one escalation call; twice as many set the unit aside for the run. |
@@ -62,10 +67,11 @@ Use this table to look up each setting, its default, and its override.
 | `run.poll_seconds` | `30` | How often an idle run re-reads mainline for a spec change, a lapsed lease, or another holder's release. |
 | `run.worktree_dir` | `""` | Where unit worktrees and each SDD's integration checkout live. Empty is `~/.vitrify/worktrees/<repo>-<hash>`; a relative path is taken from the repository root. |
 | `run.status_check_seconds` | `270` | How often an agent operating a run checks `vitrify run status` when its harness cannot notify it that the run ended. `vitrify brief run` prints the configured value; the run itself does not read it. See [Why 270 Seconds](#why-270-seconds). |
+| `authoring.approval` | `"human"` | Who signs off on a TDD, or a TDD revision, in the procedures `vitrify brief authoring` and `vitrify brief change` print. `"human"`: the human approves, and the agent stops and hands the TDD back. `"agent"`: approval is delegated to the agent, which sets the TDD's Status to Approved and bumps its Revision itself once every other line of the SDD-readiness checklist (`vitrify schema show --tdd`) passes, and stops to sharpen any line that fails. Use it when an agent runs authoring, change and run end to end; the interview rounds and `Q-###` hand-backs still go to the human. Lint reads only the TDD's Status either way. Any other value is refused (exit 2). There is no flag: overridden by `VITRIFY_AUTHORING_APPROVAL`. |
 | `harness.preferred` | `""` | The harness `vitrify run` uses. Empty takes the first the probe recorded, of `claude`, `codex`, `opencode`. |
 | `lint.readset_budget_bytes` | `65536` | The per-unit reading-set budget for lint L5 and `vitrify readset --budget`. Bytes by design: tokenizers differ between models. |
 
-A value of the wrong type — a `run.status_check_seconds` that is not a positive integer, a `run.priority` that is neither `depth` nor `history`, for example — or a file that does not parse, is an error that names the key and the file (exit 2). Every command but `vitrify init` reads both files before it does anything else, so such an error stops any command alike, whether or not it uses the setting.
+A value of the wrong type — a `run.status_check_seconds` that is not a positive integer, a `run.priority` that is neither `depth` nor `history`, an `authoring.approval` that is neither `human` nor `agent`, for example — or a file that does not parse, is an error that names the key and the file (exit 2). Every command but `vitrify init` reads both files before it does anything else, so such an error stops any command alike, whether or not it uses the setting.
 
 The role profiles resolve the same way, key by key: a repository's `[harness.claude.worker]` table holding only `model = "sonnet"` changes the worker's model in that repository and keeps its effort and arguments from `~/.vitrify/config.toml`. See [Configure Role Profiles](harnesses.md#configure-role-profiles).
 
@@ -87,6 +93,7 @@ Settings resolve in this order, first match wins: CLI flags > `VITRIFY_*` env > 
 | `VITRIFY_RUN_POLL_SECONDS` | `run.poll_seconds` |
 | `VITRIFY_RUN_WORKTREE_DIR` | `run.worktree_dir` |
 | `VITRIFY_RUN_STATUS_CHECK_SECONDS` | `run.status_check_seconds` |
+| `VITRIFY_AUTHORING_APPROVAL` | `authoring.approval` |
 | `VITRIFY_HARNESS_PREFERRED` | `harness.preferred` |
 | `VITRIFY_LINT_READSET_BUDGET_BYTES` | `lint.readset_budget_bytes` |
 

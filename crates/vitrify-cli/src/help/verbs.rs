@@ -226,6 +226,7 @@ Prints:  no task: the procedure index (task, what it is for, who follows it)
 Exit status: 0 printed · 2 --unit and --holder not given together, or not to build-unit,
          or a usage error · 4 unknown unit, no SDD, or several and no --sdd
 Config:  run.status_check_seconds (VITRIFY_RUN_STATUS_CHECK_SECONDS), in brief run;
+         authoring.approval (VITRIFY_AUTHORING_APPROVAL), in brief authoring and change;
          run.worktree_dir (VITRIFY_RUN_WORKTREE_DIR); run.lease_minutes
          (VITRIFY_RUN_LEASE_MINUTES), in the worker prompt; VITRIFY_HOME
 Examples:
