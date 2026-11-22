@@ -2,13 +2,16 @@
 source: crates/vitrify-cli/tests/cli_help.rs
 expression: "long_help(&cmd, &path)"
 ---
-Find SDD instances; list units and claimability
+Find SDD instances; list units and claimability; show the SDD graph
 
 Usage: vitrify locate [OPTIONS]
 
 Options:
       --units
           List units of one SDD with the computed claimable flag
+
+      --graph
+          Show the SDD graph the units' depends_on edges imply, with the pins and unit edges behind each SDD edge
 
       --sdd <ROOT>
           SDD root: a bundle directory, its sdd.md, or a single *.sdd.md (default: every SDD; with --units, the one SDD in the repository)
@@ -20,16 +23,24 @@ Options:
           Print help (see a summary with '-h')
 
 Reads:   SDD discovery (specs/*/sdd.md, specs/*.sdd.md, then the files git would commit);
-         with --units, the SDD's units and their front matter
+         with --units, the SDD's units and their front matter, and — for a pin in
+         depends_on — the units of other SDDs it waits on; with --graph, every SDD's units
+         and contracts
 Writes:  nothing
 Prints:  one line per SDD: root, shape, slug, version, status, unit count
          --json: [{root, shape, sdd, title, version, status, scope_roots, units}]
          --units: one line per unit: status, parallel group, claim_seq, claimable
          --units --json: {sdd, shape, version, status, units: [{unit, status, parallel_group,
            depends_on, claimed_by, claim_expires, claim_seq, lease_live, claimable, file}]}
+         --graph: per SDD, `<sdd> → <sdd>  via <pins>` and its unit edges, or `(depends on
+           no other SDD)`; then each cycle and each unit waiting behind one
+         --graph --json: {sdds, sdd_edges: [{from, to, pins, units}], unit_edges: [{from, to,
+           via}], order, cycles, waiting}, each unit {sdd, unit}
 Exit status: 0 listed · 4 no SDD; with --units, several and no --sdd · 2 usage error
-         An SDD of a schema version this vitrify does not read is still listed.
+         An SDD of a schema version this vitrify does not read is still listed (--graph
+         leaves it out, named on stderr).
 Examples:
   vitrify locate
   vitrify locate --units --sdd specs/calc
   vitrify locate --units --json
+  vitrify locate --graph

@@ -1,0 +1,8 @@
+---
+source: crates/vitrify-cli/tests/cli_graph.rs
+expression: stdout(&out)
+---
+api → core  via C-001, C-002
+  api U-001 → core U-001  via C-001
+  api U-002 → core U-002  via C-002
+core  (depends on no other SDD)

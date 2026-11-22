@@ -9,6 +9,12 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 **Active**
 : The SDD status in which it is built and maintained. An SDD goes Active only after `vitrify lint` exits 0, and only against the current revision of an Approved TDD. See [Specs: TDD and SDD](../about/concepts/specs.md).
 
+**Adoption**
+: The reuse of an attempt that was Built but never landed: a run set it aside on its branch, so its worker is known to be gone; the branch carries a Built stamp; and its recorded trace still matches the unit's reading set. An attempt whose lease merely lapsed is not adopted, because its worker may still be writing, and neither is one the gate or its worker already judged (`rejected-gate`, `rejected-write-set`, `ownership-conflict`, `blocked`, `released`) or one that wrote outside the unit's write-set; those go to a worker. A new claim, with holder `<job>-a<n>`, takes a new fencing token and sends the work straight to the gate with no worker session; adoption skips the model, never the gate. See [Build State](../about/concepts/build-state.md#kept-progress).
+
+**Anchor**
+: The commit of a unit's latest `verified` journal event: its integration, or its latest re-check. It marks where the unit's checks last passed, and the re-check cascade asks whether a path the unit is checked against changed since it. See [Build State](../about/concepts/build-state.md#the-anchor).
+
 **Audit**
 : The seven mechanical drift checks run by `vitrify audit`: orphans, ghosts, contract references, rotten Verified, trace mismatch, projection consistency, and lapsed leases. See [Gates](../about/concepts/gates.md).
 
@@ -21,7 +27,7 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 ## B
 
 **Blocked**
-: One of the two ways a run ends: work remains, and every unfinished unit's blocker is named — an open question, a failing gate command, an attempt limit, or a dependency chain. Exit code 2. See [Runs](../about/concepts/runs.md).
+: One of the two ways a run ends: work remains, and every unfinished unit's blocker is named — an open question, a failing gate command, an attempt limit, a rotten unit, or a dependency chain. In a project run the run is Blocked when any lane is. Exit code 2. Also a lane state: see **Lane state**. See [Runs](../about/concepts/runs.md).
 
 **Brief**
 : An operative procedure for one task, printed on demand by `vitrify brief <task>` in the installed binary's version. There are seven: `onboard`, `authoring`, `change`, `run`, `kickoff`, `build-unit`, and `integrate`. `vitrify brief` with no task prints the index of them, each with when to use it. Briefs are embedded in the binary; a coding agent learns vitrify from `vitrify --help` and the briefs.
@@ -52,11 +58,14 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 **Claimable**
 : A derived predicate, never stored: every `depends_on` unit is Built or Verified, and the unit is Ready, Stale, or Claimed with a lapsed lease. `vitrify locate --units` shows it.
 
+**Closure**
+: A unit's dependency closure: its `depends_on` units and pins' producer units, and everything those depend on in turn, in any SDD. The resolver computes each closure once; a unit is re-checked when a path owned by anything in its closure, or by the unit itself, changed. See [Build State](../about/concepts/build-state.md#what-a-unit-is-checked-against).
+
 **Commands (§5 Commands)**
 : The four commands an SDD's Technology Decisions name — Bootstrap, Build, Test, and Lint — run from the repository root by every gate. Test may be `none`.
 
 **Complete**
-: The run outcome in which every non-Retired unit is Verified at the current SDD version, the audit is clean, the journal replays consistently, and the §5 Test command, if the SDD has one, passes. Exit code 0.
+: The run outcome in which every non-Retired unit is Verified at the current SDD version, the audit is clean, the journal replays consistently, and the §5 Test command, if the SDD has one, passes. In a project run it holds when no lane is blocked: each SDD is Complete, or Up to date when nothing changed since its last recorded state. Exit code 0.
 
 **Consumer**
 : A unit that lists a contract in its `consumes` front matter. A contract's `Consumers:` line must name exactly its consumers (lint L4).
@@ -70,6 +79,12 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 **Contract**
 : A `C-###` entry that freezes one cross-unit surface. Units reach each other's code only through contracts. See [Contracts](../about/concepts/contracts.md).
 
+**Critical path**
+: The longest chain of unfinished units in the unit graph, which no amount of capacity shortens. `vitrify run --dry-run` prints it. See [Design Rationale](../about/design-rationale.md#scheduling-and-capacity).
+
+**Culprit**
+: The commit that broke a rotten unit's row, named by flake-aware culprit finding over the mainline commits since the unit's anchor, together with the upstream unit it integrated. The search can also end in a **flake verdict** (the row is flaky) or be inconclusive. See [Gates](../about/concepts/gates.md#rotten-units-and-culprits).
+
 ## D
 
 **Decision (`D-###`)**
@@ -81,16 +96,22 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 **Decision Log**
 : The SDD region that holds decisions (`D-###`) and questions (`Q-###`): `decisions.md` in a bundle, the `## Decisions & Open Questions` section in a single file.
 
+**Dirty unit**
+: A Verified unit that a run would re-check, because a commit since its anchor changed a path it is checked against. `vitrify check` lists dirty units with the changed paths that made each one dirty. See [Build State](../about/concepts/build-state.md#what-a-unit-is-checked-against).
+
 **Draft**
 : The SDD status while it is being authored. Also the initial status of a unit that is not yet ready to build.
 
 ## E
 
+**Early cutoff**
+: The rule that stops the re-check cascade where a change makes no difference: a unit regenerated into byte-identical files changes no path, so nothing downstream is re-checked. See [Build State](../about/concepts/build-state.md#early-cutoff-and-fingerprints).
+
 **EARS**
 : Easy Approach to Requirements Syntax: the requirement sentence templates (ubiquitous, event, state, option, and unwanted behavior) that units use for their requirements.
 
 **Event log (`events.jsonl`)**
-: `.vitrify/logs/<job>/events.jsonl`: one JSON object per line for each thing a run does — dispatches, gate steps, outcomes, its end — appended as it happens and never rewritten. `vitrify run status --follow --since-start` replays it. Evidence, not authoritative. See [Monitor a Run](../user-guides/monitor-a-run.md#check-a-runs-status).
+: `.vitrify/logs/<job>/events.jsonl`: one JSON object per line for each thing a run does — dispatches, adoptions, gate steps, re-checks, rotten units and culprits, outcomes, its end — appended as it happens and never rewritten. The line of an event that belongs to one lane names it in a `lane` field. `vitrify run status --follow --since-start` replays it. Evidence, not authoritative. See [Monitor a Run](../user-guides/monitor-a-run.md#check-a-runs-status).
 
 **Escalation**
 : The one inference call the orchestrator makes when a unit's work keeps failing or its merge conflicts. The reply is a JSON verdict — `retry`, `release`, `block`, or `abort` — that the orchestrator, not the model, enforces.
@@ -99,6 +120,9 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 : A contract whose `Producer:` line begins `external`: one SDD's stand-in for a surface it does not own. It is either a pin of another SDD's contract or a transcription of a source no SDD owns. See [Contracts](../about/concepts/contracts.md).
 
 ## F
+
+**Flake verdict**
+: The conclusion of culprit finding that no commit since a unit's last check broke its row, because the row itself is flaky. The report names the row, and the unit is re-checked again. See [Gates](../about/concepts/gates.md#rotten-units-and-culprits).
 
 **Fencing check**
 : The first integration-gate step: the token `c<seq>` in the work's branch name must equal the unit's current `claim_seq`. Work with a superseded token is rejected even if it is green.
@@ -110,6 +134,9 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 
 **Gate**
 : A fixed sequence of commands and checks that work must pass to advance, with no judgment involved. See [Gates](../about/concepts/gates.md).
+
+**Gate pool**
+: The one pool of `run.gate_jobs` tokens that every §5 command and Verification row of every gate, re-check, head check, preflight, and culprit probe in a run takes from, served by priority and then by arrival; `run.gate_jobs = 0`, the default, is one token per CPU core. Each command holds one token; how it parallelizes inside itself is its project's business. See [Gates](../about/concepts/gates.md) and [Support Matrix](../reference/support-matrix.md#platforms).
 
 **Ghost**
 : A Built or Verified unit whose `owns` globs match no file (audit check 2).
@@ -123,7 +150,7 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 : A coding-agent CLI that vitrify drives headlessly: Claude Code (`claude`), Codex (`codex`), or OpenCode (`opencode`). See [Harness CLIs](../cli/harnesses.md).
 
 **Holder**
-: The identity that holds a claim. Under `vitrify run`, holders are named `<job>-w<i>`.
+: The identity that holds a claim. Under `vitrify run`, holders are named `<job>-w<i>` for a worker and `<job>-a<n>` for an adopted attempt.
 
 ## I
 
@@ -134,7 +161,7 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 : The integration-gate step after the merge: the trace recorded when the unit was stamped Built must equal the hashes of its inputs at the mainline head. A unit built from text that has since changed is rebuilt.
 
 **Integration checkout**
-: The dedicated checkout, `<worktrees>/mainline`, in which the integration gate runs, one batch at a time.
+: A lane's dedicated checkout, `<worktrees>/mainline-<slug>`, in which its integration gate runs, one batch at a time. It is recreated at the start of each run.
 
 **Integration gate**
 : The serial gate that merges Built work and stamps it Verified: fencing check, write-set check, merge, input check, then bootstrap, build, Verification tables, lint, the Test regression check, and audit checks 1–3. See [Gates](../about/concepts/gates.md).
@@ -154,6 +181,12 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 
 ## L
 
+**Lane**
+: One SDD's build state inside a project run, with its own integration checkout and lock, integrator, and lease keeper. All lanes share one worker pool, one gate pool, and one scheduler. `run.lane_cap` bounds how many hold their checkouts at once. See [Design Rationale](../about/design-rationale.md#lanes-and-pristine-checkouts).
+
+**Lane state**
+: Where a lane stands: `idle` (units remain, but none is claimable, in flight, or due a re-check; each waits on units elsewhere), `build` (a unit is claimable, adoptable, or in flight), `recheck` (dirty Verified units whose dependencies have no work pending), `up to date` (nothing to regenerate, re-check, or build), `complete` (its done-condition holds at the end of the run), or `blocked` (unfinished, set-aside, or rotten units remain at the end, or the lane's preflight failed). `project.json` and `vitrify run status` show them. See [Design Rationale](../about/design-rationale.md#lanes-and-pristine-checkouts).
+
 **Lease**
 : The time-bounded hold a claim gives its holder — 60 minutes by default — renewed while the work continues. Expiry is advisory; the fencing token is the correctness mechanism.
 
@@ -161,7 +194,7 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 : The derived table of unit statuses — `ledger.md` in a bundle, `## State Ledger` in a single file — regenerated from unit front matter and never edited by hand.
 
 **Lint**
-: The eleven mechanical authoring checks, L1–L11, run by `vitrify lint`. An SDD must pass them before it goes Active; every run preflights with all of them except L7.
+: The twelve mechanical authoring checks, L1–L12, run by `vitrify lint`. An SDD must pass them before it goes Active; every run preflights with all of them except L7.
 
 ## M
 
@@ -188,16 +221,25 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 : Product Requirements Document: what to build, for whom, and how to tell it works, in your words — a file, or a few lines in a prompt to your agent. Authoring starts from one: the agent reads it against the TDD schema and interviews you for what it leaves open. vitrify reads no PRD itself; the TDD it becomes is the design authority. See [Author a Spec](../user-guides/author-a-spec.md#1-start-from-a-prd).
 
 **Preflight**
-: The checks `vitrify run` and kickoff perform before anything starts. Any failure refuses the start with exit code 2.
+: The checks `vitrify run` and kickoff perform before anything starts. A failure of the run as a whole refuses the start (exit code 2, or 4 for an SDD at schema 2.0 whose units consume pins); a failure of one lane's own checks refuses a run of one SDD, and in a project run blocks only that lane, as `[<slug>] preflight failed: <cause> → <fix>`, while the other lanes build. `vitrify run --dry-run` performs all of it.
 
 **Primary checkout**
 : Your own checkout of the repository. vitrify never builds or gates in it; when it has mainline checked out, a run fast-forwards it commit by commit and never resets it.
+
+**Pristine checkout**
+: A checkout reset to the commit being checked with every untracked and ignored file removed. Every gate, re-check, preflight, and culprit probe starts from one, and lane checkouts are recreated at the start of each run, so a result never depends on leftovers. See [Gates](../about/concepts/gates.md#every-gate-starts-from-a-pristine-checkout).
+
+**Priority**
+: The order in which claimable units are dispatched in a project run: a unit's Hu's label, the number of unfinished units on the longest chain from it to the end of the graph, itself included, so the unit with the most work behind it goes first. Ties break by SDD slug, then unit ID. `run.priority = "history"` weighs each unit by what its past worker sessions took instead of 1. See [Design Rationale](../about/design-rationale.md#scheduling-and-capacity) and [Configuration](../cli/configuration.md).
 
 **Probe**
 : What `vitrify init` and `vitrify probe` do: run git and each harness CLI's one streaming headless spelling, and each role that adds flags, and record what works in the `[probe]` tables of `~/.vitrify/config.toml`. `vitrify probe` asks before it changes the record. See [Harness CLIs](../cli/harnesses.md).
 
 **Producer**
 : The unit that implements a contract's surface, named on the contract's `Producer:` line.
+
+**Project run**
+: A plain `vitrify run` in a repository with several SDDs, or `vitrify run --sdd <root> --upstream` that selects more than one: one deterministic, concurrent, incremental build over one unit graph, with a lane per Active SDD (a lane for each SDD selected, with `--upstream`). Only a project run prints the `Project build job` header, `[<slug>]` event lines, and the per-SDD final report. `vitrify run --sdd <root>`, or a repository of one SDD, is a run of one lane. See [Design Rationale](../about/design-rationale.md#project-runs) and [Run a Build](../user-guides/run-a-build.md).
 
 ## Q
 
@@ -212,8 +254,14 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 **Ready**
 : The unit status in which it can be claimed once its dependencies are Built or Verified.
 
+**Re-check**
+: Running a Verified unit's Verification rows again, with no model call, because a path it is checked against changed since its anchor. A passing re-check appends a `verified` event with actor `recheck`; `vitrify run --recheck` distrusts every recorded check and re-checks everything. Compare **Regenerate**: a model call on a spec change. See [Build State](../about/concepts/build-state.md#the-two-cascades).
+
 **Retired**
 : The unit status for removed scope. Retired units are excluded from progress totals.
+
+**Rotten unit**
+: A Verified unit whose rows fail after a change upstream, and fail on the base commit too, so the change that was being checked did not break them. It is reported with its culprit, never regenerated, and the units that depend on it wait, in any SDD. Not the same as **Rotten Verified**, audit check 4. See [Gates](../about/concepts/gates.md#rotten-units-and-culprits).
 
 **Role**
 : The profile a harness is invoked with: `worker` for a first attempt, `retry` for later attempts, and `escalation` for the judge. Set in the `[harness.<name>.<role>]` tables of `~/.vitrify/config.toml`.
@@ -222,12 +270,15 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 : A Verified unit whose Verification command now exits non-zero (audit check 4).
 
 **Run record**
-: `.vitrify/run.json`, a snapshot of the latest run for people and scripts; once the run ends it carries the final report as `report`. vitrify never decides anything from it. See [Monitor a Run](../user-guides/monitor-a-run.md).
+: `.vitrify/run.json`, a snapshot of the latest run for people and scripts (a copy is kept in `.vitrify/logs/<job>/`, beside `project.json`, which records each lane's state and the critical path as it ran); once the run ends it carries the final report as `report`. vitrify never decides anything from it. See [Monitor a Run](../user-guides/monitor-a-run.md).
 
 ## S
 
+**`shared_inputs`**
+: An optional list in an SDD's core front matter of the repository-relative paths or globs outside every SDD's `scope_roots` that its commands read. Without it every outside path is an input of every unit; with it, only the paths it matches are. See [Data Model and Formats Specification](../reference/formats.md#33-sdd-front-matter-shared_inputs) and [Build State](../about/concepts/build-state.md#what-a-unit-is-checked-against).
+
 **Schema version**
-: The SDD schema version an instance declares in `schema_version`, in its core front matter. It is required, and this vitrify reads exactly `2.0`; a missing key or any other value is refused with exit 4, naming `2.0`. See [Versioning](../reference/formats.md#10-versioning).
+: The SDD schema version an instance declares in `schema_version`, in its core front matter. It is required, and this vitrify reads `2.0` and `2.1` (2.1 lets `depends_on` name a pin, which a project run reads as a wait for the pin's producing units); a missing key or any other value is refused with exit 4, naming both. See [Versioning](../reference/formats.md#10-versioning).
 
 **Scope roots (`scope_roots`)**
 : The directories an SDD governs. Every file under them that git would commit must be owned by exactly one unit or listed as `unmanaged`.
@@ -236,7 +287,7 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 : The buildable specification of a system or feature — the *what and exactly how*: pinned technology, file layout, frozen contracts, work units with executable checks, and the state of the build. Also short for spec-driven development, the method vitrify implements.
 
 **Single file**
-: The SDD shape held in one file, `specs/<slug>.sdd.md`, with units and contracts as `###` regions. Suited to about eight units or fewer; under `vitrify run` it forces a worker cap of 1. Compare **Bundle**.
+: The SDD shape held in one file, `specs/<slug>.sdd.md`, with units and contracts as `###` regions. Suited to about eight units or fewer; under `vitrify run` its lane runs one worker at a time. Compare **Bundle**.
 
 **Stale**
 : The unit status after one of its inputs changed under a Built or Verified unit. A Stale unit is claimable and gets rebuilt.
@@ -249,6 +300,9 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 
 **State verbs**
 : The commands that write build state: `claim`, `renew`, `release`, `trace record`, `journal append`, `ledger regen`, `change apply`, and the fixing flags of `audit`. Stamps are never written by hand.
+
+**Suite anchor**
+: The commit of an SDD's latest `audit` journal event carrying `suite: "pass"`: where its §5 Test command last passed. The suite is judged against it as a unit is against its anchor, so a change that reaches none of the SDD's units leaves the recorded pass standing. A gate or re-check that passes the Test command records `suite: "pass"`. See [Build State](../about/concepts/build-state.md#the-anchor).
 
 ## T
 
@@ -271,6 +325,9 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 
 **Unit (work unit)**
 : A `U-###` entry: the smallest buildable piece of an SDD, with exclusive ownership, EARS requirements, a decision-complete Implementation block, and a Verification table. One unit fits one worker session. See [Work Units](../about/concepts/units.md).
+
+**Unit graph**
+: The one graph a project run schedules: its nodes are the units of every SDD, and its edges are local `depends_on` entries plus the edges through a pin to the units its authority names as producers. It must be acyclic; the derived SDD graph, which may hold mutual pairs, is for display. `vitrify locate --graph` prints it. See [Design Rationale](../about/design-rationale.md#the-resolver).
 
 **Unit gate**
 : The worker-side gate in the unit's worktree: bootstrap, build, the unit's Verification table, and lint, all exiting 0 before the unit is stamped Built.

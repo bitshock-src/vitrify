@@ -147,7 +147,9 @@ fn owned_globs(units: &[Unit]) -> Vec<(String, Vec<String>)> {
     out
 }
 
-fn unmanaged_globs(core_text: &str) -> Vec<String> {
+/// The `unmanaged:` globs of an SDD's core text (its `System Layout &
+/// Ownership` section).
+pub fn unmanaged_globs(core_text: &str) -> Vec<String> {
     let sec = model::section(core_text, "System Layout & Ownership");
     let mut out = Vec::new();
     let mut in_block = false;

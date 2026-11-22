@@ -105,6 +105,7 @@ Use this table to pick the commands for a change.
 | any change | `cargo fmt --all --check`, then `cargo clippy --workspace --all-targets --locked -- -D warnings`, then `cargo test --workspace --locked` |
 | the orchestrator, claims, or the git layer | also `cargo test --workspace --locked -- --ignored` (tier 2) |
 | the calc build end to end, without a model | `cargo test -p vitrify-cli --test e2e -- --ignored` ([Build the calc Example Without a Model](#build-the-calc-example-without-a-model)) |
+| the scheduler's throughput | `VITRIFY_BENCH=1 cargo test -p vitrify-cli --test bench -- --ignored --nocapture`: a project run on a synthetic repository, its makespan against the scheduling lower bound; minutes long, and neither tier runs it |
 | help text | `cargo test -p vitrify-cli --test cli_help`, then `cargo insta review` for the changed snapshots |
 | an `insta` snapshot | review it with `cargo insta review` (from the `cargo-insta` tool); regenerate a file under `fixtures/golden/` only in a change that raises `schema_version` |
 

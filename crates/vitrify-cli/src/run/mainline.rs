@@ -1,5 +1,6 @@
-//! The run's handle on mainline: which repository, which SDD, which branch,
-//! and how a commit gets there.
+//! A lane's handle on mainline: which repository, which SDD, which branch,
+//! and how a commit gets there — and the lane's integration checkout, which
+//! is reset to a pristine state before every use.
 //!
 //! The SDD is pinned by its path relative to the repository root, resolved
 //! once in preflight. Every later read — in the primary checkout, a unit
@@ -18,6 +19,7 @@ use crate::cmd::{self, claim};
 use crate::gate::ShRunner;
 use crate::git::{Git, GitError};
 use crate::layout::Layout;
+use crate::signals;
 
 #[derive(Debug, Clone)]
 pub struct Mainline {
@@ -26,10 +28,26 @@ pub struct Mainline {
     pub layout: Layout,
     /// The SDD's root relative to the repository root.
     pub sdd_rel: PathBuf,
+    /// The SDD's name in branch, worktree and checkout names.
+    pub slug: String,
     /// The mainline branch.
     pub branch: String,
     /// Publish by `git push` (origin arbitrates) rather than a local CAS.
     pub push: bool,
+}
+
+/// A held lock on a lane's integration checkout: one user of it at a time,
+/// across processes. Unlocked when dropped.
+pub struct LaneLock(std::fs::File);
+
+impl Drop for LaneLock {
+    /// Unlock before the file closes, as a temp slot does (`gate::TmpSlot`):
+    /// left to the close, the lock can outlive its holder while a child
+    /// forked meanwhile (a worker, say) has yet to exec — and the next user
+    /// wait on it, told that another process has the checkout.
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
 }
 
 /// A commit that reached mainline.
@@ -98,23 +116,120 @@ impl Mainline {
         )
     }
 
-    /// Bring the detached worktree at `path` to the mainline head, creating
-    /// it on first use. Returns the head.
+    /// This lane's integration checkout.
+    pub fn checkout(&self) -> PathBuf {
+        self.layout.mainline(&self.slug)
+    }
+
+    /// Take this lane's integration checkout, waiting while another process
+    /// has it; `waiting` is called once if it must wait. `None` = the run
+    /// was interrupted while waiting.
+    pub fn lock_checkout(&self, waiting: &dyn Fn()) -> Result<Option<LaneLock>, CoreError> {
+        let path = self.layout.mainline_lock(&self.slug);
+        let io = |source| CoreError::Io {
+            path: path.clone(),
+            source,
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(io)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(io)?;
+        let mut told = false;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Some(LaneLock(file))),
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    if signals::interrupted() {
+                        return Ok(None);
+                    }
+                    if !told {
+                        waiting();
+                        told = true;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+                Err(std::fs::TryLockError::Error(e)) => return Err(io(e)),
+            }
+        }
+    }
+
+    /// Remove this lane's checkouts — integration, base and culprit probe
+    /// — giving their room back (`run.lane_cap`). Taken under the lane's
+    /// lock, so a checkout another run is using is not pulled out from
+    /// under it. A checkout that is not there is fine.
+    pub fn remove_checkouts(&self) {
+        let Ok(Some(_held)) = self.lock_checkout(&|| {}) else {
+            return;
+        };
+        let _turn = claim::tx_lock();
+        for path in [
+            self.checkout(),
+            self.layout.base_checkout(&self.slug),
+            self.layout.wt_root.join(format!("probe-{}", self.slug)),
+        ] {
+            if path.exists() {
+                let _ = self.primary.worktree_remove(&path);
+            }
+            if path.exists() {
+                let _ = std::fs::remove_dir_all(&path);
+                let _ = self.primary.worktree_remove(&path);
+            }
+        }
+    }
+
+    /// Remove this lane's integration checkout and create it again at
+    /// `rev`: whatever an earlier run left there — build outputs, a lock
+    /// file a crash left behind, a half-finished merge — is gone. Call it
+    /// holding [`Mainline::lock_checkout`], so a checkout another live run
+    /// is using is never pulled out from under it.
+    pub fn recreate_checkout(&self, rev: &str) -> Result<PathBuf, CoreError> {
+        let path = self.checkout();
+        // the checkout is one more worktree: its turn like any other
+        let _turn = claim::tx_lock();
+        if path.exists() {
+            // `worktree remove` takes git's own record of the checkout with
+            // it, a stale index lock included
+            let _ = self.primary.worktree_remove(&path);
+        }
+        if path.exists() {
+            // not a worktree git knows (or it would not let go): the
+            // directory goes, and git forgets whatever it pointed at
+            std::fs::remove_dir_all(&path).map_err(|source| CoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            let _ = self.primary.worktree_remove(&path);
+        }
+        self.pristine(&path, rev)?;
+        Ok(path)
+    }
+
+    /// Bring the detached worktree at `path` to the mainline head, pristine
+    /// ([`Mainline::pristine`]). Returns the head.
     pub fn sync_checkout(&self, path: &Path) -> Result<String, CoreError> {
         let head = self.head()?;
-        self.checkout_at(path, &head)?;
+        self.pristine(path, &head)?;
         Ok(head)
     }
 
-    /// Bring the detached worktree at `path` to `rev`, creating it on first
-    /// use; untracked files git does not ignore are removed.
-    pub fn checkout_at(&self, path: &Path, rev: &str) -> Result<(), CoreError> {
+    /// Bring the detached worktree at `path` to `rev` with nothing else in
+    /// it, creating it on first use: an unfinished merge is abandoned,
+    /// tracked files are reset, and every other file — ignored ones too:
+    /// environments, build outputs, caches — is removed. Every gate, head
+    /// check and preflight starts from here, so no result depends on what
+    /// an earlier one left behind.
+    pub fn pristine(&self, path: &Path, rev: &str) -> Result<(), CoreError> {
         if path.join(".git").exists() {
             let wt = self.primary.at(path);
             // an interrupted merge would refuse the reset
             let _ = wt.merge_abort();
             wt.reset_hard(rev).map_err(CoreError::from)?;
-            wt.clean_fdq().map_err(CoreError::from)?;
+            wt.clean_all().map_err(CoreError::from)?;
         } else {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(|source| CoreError::Io {
@@ -200,7 +315,7 @@ impl Mainline {
                     std::thread::sleep(std::time::Duration::from_millis(100 * attempt));
                 }
                 let base = self.head()?;
-                self.checkout_at(&tx, &base)?;
+                self.pristine(&tx, &base)?;
                 if !build(&tx)? {
                     return Ok(None);
                 }

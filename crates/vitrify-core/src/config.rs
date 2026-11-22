@@ -35,6 +35,15 @@ pub struct RunConfig {
     /// means as many as this machine has CPU cores to give
     /// ([`RunConfig::rows_at_once`]); 1 runs them one at a time.
     pub gate_jobs: i64,
+    /// Lanes active at once in a project run — a lane is one SDD's build
+    /// state, with its own integration checkout on disk. 0 — the default —
+    /// means no limit ([`RunConfig::lane_limit`]); lanes are admitted by
+    /// priority when there is one.
+    pub lane_cap: i64,
+    /// How a project run ranks the units that are ready: `"depth"` — the
+    /// default, every unit weighing 1 — or `"history"`, each unit weighing
+    /// what its past worker sessions took ([`RunConfig::priority_by_history`]).
+    pub priority: String,
     /// How often a run with nothing to react to looks at mainline again —
     /// for a spec change, a lease that lapsed, another holder's release.
     pub poll_seconds: i64,
@@ -74,6 +83,8 @@ impl Default for Config {
                 abort_failed_waves: 2,
                 worker_timeout_minutes: 120,
                 gate_jobs: 0,
+                lane_cap: 0,
+                priority: "depth".to_string(),
                 poll_seconds: 30,
                 worktree_dir: String::new(),
                 status_check_seconds: 270,
@@ -89,6 +100,11 @@ impl Default for Config {
 }
 
 impl RunConfig {
+    /// Whether unit weights come from runtime history rather than being 1.
+    pub fn priority_by_history(&self) -> bool {
+        self.priority == "history"
+    }
+
     /// How many Verification rows run at once: `gate_jobs` when it names a
     /// number, otherwise one per CPU core available to this process — the
     /// rule Rust's test harness uses for its test threads (`cargo test`
@@ -100,6 +116,12 @@ impl RunConfig {
         } else {
             available_parallelism()
         }
+    }
+
+    /// How many lanes may be active at once: `lane_cap` when it names a
+    /// number, `None` — no limit — when it is 0 or less.
+    pub fn lane_limit(&self) -> Option<usize> {
+        (self.lane_cap >= 1).then_some(self.lane_cap as usize)
     }
 
     /// Whether the number of rows at once follows the machine rather than
@@ -117,6 +139,16 @@ pub fn available_parallelism() -> usize {
         .unwrap_or(1)
 }
 
+/// `run.priority` as the canonical word, `None` for anything but the two
+/// modes.
+fn priority_value(v: &str) -> Option<&'static str> {
+    match v {
+        "depth" => Some("depth"),
+        "history" => Some("history"),
+        _ => None,
+    }
+}
+
 /// Typed partial from the clap layer; every `Some` wins over everything.
 #[derive(Debug, Clone, Default)]
 pub struct Overrides {
@@ -125,6 +157,8 @@ pub struct Overrides {
     pub lease_minutes: Option<i64>,
     pub readset_budget_bytes: Option<i64>,
     pub gate_jobs: Option<i64>,
+    pub lane_cap: Option<i64>,
+    pub priority: Option<String>,
 }
 
 fn apply_toml(cfg: &mut Config, value: &toml::Value, source: &str) -> Result<(), CoreError> {
@@ -175,6 +209,14 @@ fn apply_toml(cfg: &mut Config, value: &toml::Value, source: &str) -> Result<(),
         }
         if let Some(v) = t.get("gate_jobs") {
             cfg.run.gate_jobs = v.as_integer().ok_or_else(|| bad("run.gate_jobs"))?;
+        }
+        if let Some(v) = t.get("lane_cap") {
+            cfg.run.lane_cap = v.as_integer().ok_or_else(|| bad("run.lane_cap"))?;
+        }
+        if let Some(v) = t.get("priority") {
+            cfg.run.priority = priority_value(v.as_str().ok_or_else(|| bad("run.priority"))?)
+                .ok_or_else(|| bad("run.priority"))?
+                .to_string();
         }
         if let Some(v) = t.get("poll_seconds") {
             cfg.run.poll_seconds = v.as_integer().ok_or_else(|| bad("run.poll_seconds"))?;
@@ -338,6 +380,22 @@ fn apply_env(cfg: &mut Config, env: &[(String, String)]) -> Result<(), CoreError
             .parse()
             .map_err(|_| bad_int("VITRIFY_RUN_GATE_JOBS"))?;
     }
+    if let Some(v) = get("VITRIFY_RUN_LANE_CAP") {
+        cfg.run.lane_cap = v
+            .trim()
+            .parse()
+            .map_err(|_| bad_int("VITRIFY_RUN_LANE_CAP"))?;
+    }
+    if let Some(v) = get("VITRIFY_RUN_PRIORITY") {
+        cfg.run.priority = priority_value(v.trim())
+            .ok_or_else(|| {
+                CoreError::refusal(
+                    2,
+                    "error: environment variable VITRIFY_RUN_PRIORITY must be depth or history",
+                )
+            })?
+            .to_string();
+    }
     if let Some(v) = get("VITRIFY_RUN_POLL_SECONDS") {
         cfg.run.poll_seconds = v
             .trim()
@@ -404,6 +462,14 @@ pub fn load(
     if let Some(v) = overrides.gate_jobs {
         cfg.run.gate_jobs = v;
     }
+    if let Some(v) = overrides.lane_cap {
+        cfg.run.lane_cap = v;
+    }
+    if let Some(v) = &overrides.priority
+        && let Some(v) = priority_value(v)
+    {
+        cfg.run.priority = v.to_string();
+    }
     Ok(cfg)
 }
 
@@ -452,6 +518,65 @@ mod tests {
         let cfg = load_with(&[("VITRIFY_RUN_GATE_JOBS", "3")], &auto);
         assert!(cfg.run.rows_follow_cores());
         assert_eq!(cfg.run.rows_at_once(), available_parallelism());
+    }
+
+    #[test]
+    fn lane_cap_defaults_to_no_limit_and_resolves_like_the_other_run_settings() {
+        let cfg = load_with(&[], &Overrides::default());
+        assert_eq!(cfg.run.lane_cap, 0);
+        assert_eq!(cfg.run.lane_limit(), None);
+        // env over default, an override over env
+        let cfg = load_with(&[("VITRIFY_RUN_LANE_CAP", "3")], &Overrides::default());
+        assert_eq!(cfg.run.lane_limit(), Some(3));
+        let over = Overrides {
+            lane_cap: Some(0),
+            ..Default::default()
+        };
+        let cfg = load_with(&[("VITRIFY_RUN_LANE_CAP", "3")], &over);
+        assert_eq!(cfg.run.lane_limit(), None);
+        // a value of the wrong type names the key
+        let env = vec![("VITRIFY_RUN_LANE_CAP".to_string(), "many".to_string())];
+        let err = load(None, None, &env, &Overrides::default()).unwrap_err();
+        assert!(format!("{err}").contains("VITRIFY_RUN_LANE_CAP"), "{err}");
+        let dir = std::env::temp_dir().join(format!("vfy-cfg-lanes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), "[run]\nlane_cap = \"two\"\n").unwrap();
+        let err = load(None, Some(&dir), &[], &Overrides::default()).unwrap_err();
+        assert!(format!("{err}").contains("run.lane_cap"), "{err}");
+        std::fs::write(dir.join("config.toml"), "[run]\nlane_cap = 2\n").unwrap();
+        let cfg = load(None, Some(&dir), &[], &Overrides::default()).unwrap();
+        assert_eq!(cfg.run.lane_limit(), Some(2));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn priority_defaults_to_depth_and_resolves_like_the_other_run_settings() {
+        let cfg = load_with(&[], &Overrides::default());
+        assert_eq!(cfg.run.priority, "depth");
+        assert!(!cfg.run.priority_by_history());
+        let cfg = load_with(
+            &[("VITRIFY_RUN_PRIORITY", "history")],
+            &Overrides::default(),
+        );
+        assert!(cfg.run.priority_by_history());
+        let over = Overrides {
+            priority: Some("depth".to_string()),
+            ..Default::default()
+        };
+        let cfg = load_with(&[("VITRIFY_RUN_PRIORITY", "history")], &over);
+        assert!(!cfg.run.priority_by_history());
+        let env = vec![("VITRIFY_RUN_PRIORITY".to_string(), "fast".to_string())];
+        let err = load(None, None, &env, &Overrides::default()).unwrap_err();
+        assert!(format!("{err}").contains("VITRIFY_RUN_PRIORITY"), "{err}");
+        let dir = std::env::temp_dir().join(format!("vfy-cfg-prio-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), "[run]\npriority = \"fast\"\n").unwrap();
+        let err = load(None, Some(&dir), &[], &Overrides::default()).unwrap_err();
+        assert!(format!("{err}").contains("run.priority"), "{err}");
+        std::fs::write(dir.join("config.toml"), "[run]\npriority = \"history\"\n").unwrap();
+        let cfg = load(None, Some(&dir), &[], &Overrides::default()).unwrap();
+        assert!(cfg.run.priority_by_history());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -40,6 +40,25 @@
 //!   through its stages. After 120 s it reports `released`. The copied
 //!   artifacts get a fresh modification time, as files an agent wrote would.
 //!
+//! * `STUB_MAP` may contain `{sdd}`, replaced by the job's SDD slug (the
+//!   `sdd/<slug>/<unit>/c<seq>` branch's slug; the SDD path's last
+//!   component when the branch has none), so one setting
+//!   (`STUB_MAP=…/stub-map-{sdd}.toml`) serves every lane of a project run.
+//!   A plain path is used as it is.
+//! * `STUB_SLEEP_MS=<ms>` — in `build` mode, sleep that long after starting,
+//!   before any artifact: every unit takes a fixed time (makespan
+//!   measurements).
+//! * `STUB_SLEEP_MAP=<file>` — per-unit durations, one per line:
+//!   `<sdd> <unit> <ms>` or `<unit> <ms>` (blank lines and `#` comments are
+//!   ignored). The `<sdd> <unit>` line wins over the `<unit>` line, which
+//!   wins over `STUB_SLEEP_MS`.
+//! * `STUB_LOG=<file>` — append one line when a worker starts and one when
+//!   it ends (`hang` never ends): `<event> <sdd> <unit> <seq> <ms>`, with
+//!   `<event>` `start` or `end`, the SDD slug, the unit, the claim seq and
+//!   the milliseconds since the Unix epoch (the same clock in every worker
+//!   process, so tests compare lines across them). Each line is one
+//!   `O_APPEND` write, so concurrent workers do not interleave.
+//!
 //! Every run notes its `TMPDIR` and whether its prompt carried a session
 //! note on stderr.
 
@@ -73,6 +92,7 @@ fn main() {
         prompt.contains("## This session"),
         prompt.contains("An earlier attempt at this unit")
     );
+    let slug = sdd_slug(&branch, &sdd);
     let claim_seq: i64 = branch
         .rsplit('/')
         .next()
@@ -116,6 +136,14 @@ fn main() {
         return;
     }
 
+    if !unit.is_empty() {
+        log_event("start", &slug, &unit, claim_seq);
+    }
+    if mode == "build"
+        && let Some(ms) = sleep_ms(&slug, &unit)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
     match mode.as_str() {
         "hang" => loop {
             std::thread::sleep(std::time::Duration::from_secs(3600));
@@ -135,7 +163,67 @@ fn main() {
                 "stub blocked on a spec gap",
             );
         }
-        _ => build(&unit, &branch, &sdd, claim_seq),
+        _ => build(&unit, &branch, &sdd, &slug, claim_seq),
+    }
+    if !unit.is_empty() {
+        log_event("end", &slug, &unit, claim_seq);
+    }
+}
+
+/// The SDD's slug: the `<slug>` of an `sdd/<slug>/<unit>/c<seq>` branch, else
+/// the last component of the job's SDD path without its `.sdd.md`.
+fn sdd_slug(branch: &str, sdd: &str) -> String {
+    if let Some(rest) = branch.strip_prefix("sdd/") {
+        let parts: Vec<&str> = rest.split('/').collect();
+        if parts.len() >= 3 {
+            return parts[..parts.len() - 2].join("/");
+        }
+    }
+    let last = sdd.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    last.strip_suffix(".sdd.md").unwrap_or(last).to_string()
+}
+
+/// `STUB_SLEEP_MAP` entry for this unit, else `STUB_SLEEP_MS`.
+fn sleep_ms(slug: &str, unit: &str) -> Option<u64> {
+    if let Ok(path) = std::env::var("STUB_SLEEP_MAP") {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let mut by_unit = None;
+        for line in text.lines() {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            match words.as_slice() {
+                [s, u, ms] if *s == slug && *u == unit => {
+                    if let Ok(ms) = ms.parse() {
+                        return Some(ms);
+                    }
+                }
+                [u, ms] if !u.starts_with('#') && *u == unit => by_unit = ms.parse().ok(),
+                _ => {}
+            }
+        }
+        if by_unit.is_some() {
+            return by_unit;
+        }
+    }
+    std::env::var("STUB_SLEEP_MS").ok()?.parse().ok()
+}
+
+/// `STUB_LOG`: one `O_APPEND` write of one line.
+fn log_event(event: &str, slug: &str, unit: &str, claim_seq: i64) {
+    let Ok(path) = std::env::var("STUB_LOG") else {
+        return;
+    };
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let line = format!("{event} {slug} {unit} {claim_seq} {ms}\n");
+    if let Ok(mut f) = std::fs::File::options()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write;
+        let _ = f.write_all(line.as_bytes());
     }
 }
 
@@ -244,12 +332,16 @@ fn step(point: &str, unit: &str, branch: &str, claim_seq: i64) -> bool {
     false
 }
 
-fn build(unit: &str, branch: &str, sdd: &str, claim_seq: i64) {
+fn build(unit: &str, branch: &str, sdd: &str, slug: &str, claim_seq: i64) {
     if !step("start", unit, branch, claim_seq) {
         return;
     }
     let solution = PathBuf::from(std::env::var("STUB_REF").unwrap_or_default());
-    let map_path = PathBuf::from(std::env::var("STUB_MAP").unwrap_or_default());
+    let map_path = PathBuf::from(
+        std::env::var("STUB_MAP")
+            .unwrap_or_default()
+            .replace("{sdd}", slug),
+    );
     let vitrify = std::env::var("VITRIFY_BIN").unwrap_or_else(|_| "vitrify".to_string());
 
     // STUB_MAP: [units] U-001 = ["src/a.txt", ...]

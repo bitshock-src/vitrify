@@ -26,6 +26,8 @@ struct Board {
     /// Where the board is written; `None` writes nothing.
     path: Option<PathBuf>,
     events: EventLog,
+    /// The lane the board is a lane's, named on its events.
+    lane: Option<String>,
     step: &'static str,
     since: UtcTime,
     batch: Vec<String>,
@@ -51,11 +53,13 @@ impl Board {
             detail = format!("{detail} · {}", self.batch.join(", "));
         }
         let units = self.batch.iter().map(|u| J::s(u.clone())).collect();
-        self.events.write(
-            &RunEvent::new(UtcTime::now(), "gate", None, None, detail)
-                .with("batch", J::Arr(units))
-                .with("step", J::s(name)),
-        );
+        let mut e = RunEvent::new(UtcTime::now(), "gate", None, None, detail)
+            .with("batch", J::Arr(units))
+            .with("step", J::s(name));
+        if let Some(lane) = &self.lane {
+            e = e.with("lane", J::s(lane.clone()));
+        }
+        self.events.write(&e);
     }
 
     /// The board as `gate.json` holds it.
@@ -105,6 +109,7 @@ impl GateBoard {
             inner: Arc::new(Mutex::new(Board {
                 path,
                 events: EventLog::off(),
+                lane: None,
                 step: "idle",
                 since: UtcTime::now(),
                 batch: Vec::new(),
@@ -127,6 +132,12 @@ impl GateBoard {
     /// The board, also appending a `gate` event to `events` at each step.
     pub fn with_events(self, events: EventLog) -> GateBoard {
         self.lock().events = events;
+        self
+    }
+
+    /// The board of the lane `slug`: its `gate` events name it.
+    pub fn for_lane(self, slug: &str) -> GateBoard {
+        self.lock().lane = Some(slug.to_string());
         self
     }
 

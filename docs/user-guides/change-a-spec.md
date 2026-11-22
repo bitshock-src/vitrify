@@ -37,6 +37,18 @@ Decide what kind of change it is; the bump decides what `vitrify change apply` d
 
 If a run is building this SDD, you can still land the change — see [Change the Spec During a Run](#change-the-spec-during-a-run).
 
+### What a Change Reaches
+
+A change can force two different kinds of redo, and the next `vitrify run` does each only where the change reaches. Use this table to see which one your edit triggers.
+
+| | Regenerate | Re-check |
+| --- | --- | --- |
+| What changed | spec text a unit is generated from: its own entry, a contract it consumes (a pin included), Ground Rules, Technology Decisions | code a unit is checked against: its own files, and those of every unit it depends on, in this SDD or through a pin |
+| What the next run does | a model call: the unit is marked Stale and rebuilt | no model call: its Verification rows run again, and a pass is recorded |
+| Where you see it | `vitrify change apply` names the Stale units | `vitrify check` lists the dirty units; `vitrify run --dry-run` plans them |
+
+A change entry therefore regenerates what the spec edit moved and nothing else. Code that changes afterward, in this SDD or in another, re-checks its dependents and regenerates none of them, because a unit is generated against frozen contracts, never against its dependencies' code. A unit that is regenerated into byte-identical files changes no path, so nothing downstream of it is re-checked: that is early cutoff. [Build State](../about/concepts/build-state.md#the-two-cascades) explains both.
+
 ## Write the Change Entry
 
 Every change entry lists the version bump, the TDD pin status, the units and contracts added, modified, and removed, the staleness marks applied, and the resulting codebase delta in one line. This is the SDD schema's example:
@@ -101,6 +113,18 @@ vitrify pin sync --all
 ```
 
 The first lists every pin and which ones are now `stale`; the second rewrites their hashes and prints each consumer's `Staleness applied` line. For each consumer it names, write that consumer's change entry around its line, then run `vitrify change apply --sdd <consumer>`. Until then the consumer's `lint` — and so its run's preflight — refuses. [Work With Several SDDs](multiple-sdds.md#4-bring-consumers-back-in-step) has the full procedure.
+
+## Migrate an SDD to Schema 2.1
+
+An SDD whose units consume pins moves to schema 2.1 so that a project run knows which pins carry code. Until it does, `vitrify run` in a repository of several SDDs refuses with exit 4, naming the SDD, and `vitrify run --sdd <root>` builds it alone. Migrating records a need the built code already has, so it is one PATCH change entry:
+
+1. For each unit, classify each pin it consumes. A pin whose built code the unit imports, links, installs, or runs in its tests is a code pin; a pin it only codes against as an interface or parses as data stays in `consumes` alone. [Author a Spec](author-a-spec.md#classify-each-pin-a-unit-consumes) has the rule.
+2. Add each code pin to that unit's `depends_on`, beside its entry in `consumes`.
+3. Set `schema_version: 2.1` in the core front matter.
+4. Write one PATCH change entry that says so, with `Staleness applied: —`, and set `version` and `updated` to match it.
+5. Run `vitrify change apply --sdd <root>`, then `vitrify check --sdd <root>`, and commit once.
+
+Use PATCH and not MINOR. `depends_on` is part of each unit's own entry, so the edit moves each edited unit's trace; a PATCH entry makes `vitrify change apply` re-record those traces and keep every status and stamp, where a MINOR or MAJOR entry would mark the units Stale and have the next run rebuild code that is already correct. A pin in `depends_on` under `schema_version: 2.0` is a lint L1 finding, so set the version in the same commit. `vitrify locate --graph` then shows the edges you declared. If a pin you added closes a cycle, lint L12 and the run's preflight print it as the path that closes it; see [A Project Run Refuses a Cycle](../resources/troubleshooting.md#a-project-run-refuses-a-cycle).
 
 ## Change the Spec During a Run
 

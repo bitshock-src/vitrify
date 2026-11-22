@@ -536,6 +536,13 @@ fn schema_versions_read_and_refuse() {
     ] {
         assert_eq!(model::schema_of(&meta(block)), Ok(Schema::V2_0), "{block}");
     }
+    for block in [
+        "schema_version: 2.1\n",
+        "schema_version: \"2.1.0\"\n",
+        "schema_version: 2.1.3\n",
+    ] {
+        assert_eq!(model::schema_of(&meta(block)), Ok(Schema::V2_1), "{block}");
+    }
     assert_eq!(
         model::schema_of(&meta("sdd: x\n")),
         Err(model::SchemaRefusal::Missing)
@@ -547,7 +554,9 @@ fn schema_versions_read_and_refuse() {
     for block in [
         "schema_version: 1.0\n",
         "schema_version: 1.1\n",
-        "schema_version: 2.1\n",
+        "schema_version: 2.2\n",
+        "schema_version: 3.0\n",
+        "schema_version: 2.1.0.1\n",
         "schema_version: one\n",
     ] {
         assert!(
@@ -560,14 +569,14 @@ fn schema_versions_read_and_refuse() {
     }
 
     // an SDD of a version this vitrify does not read is refused, naming
-    // the version it reads
+    // the versions it reads
     let repo = Repo::new();
     bundle(&repo, "other", "schema_version: 1.1\n", &[]);
     let err = Instance::load(repo.sdd("specs/other")).unwrap_err();
     assert_eq!(err.exit_code(), 4);
     assert!(
         err.to_string()
-            .contains("schema_version 1.1 is not one this vitrify reads (2.0)"),
+            .contains("schema_version 1.1 is not one this vitrify reads (2.0 and 2.1)"),
         "{err}"
     );
     bundle(&repo, "bare", "schema_version: —\n", &[]);
@@ -575,7 +584,7 @@ fn schema_versions_read_and_refuse() {
     assert_eq!(err.exit_code(), 4);
     assert!(
         err.to_string()
-            .contains("schema_version is missing; this vitrify reads 2.0"),
+            .contains("schema_version is missing; this vitrify reads 2.0 and 2.1"),
         "{err}"
     );
 }

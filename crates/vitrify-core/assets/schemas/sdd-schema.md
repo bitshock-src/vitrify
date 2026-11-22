@@ -56,7 +56,7 @@ Every SDD begins with machine-readable front matter:
 ---
 sdd: checkout-core            # stable slug; never reused
 title: Checkout Core Service
-schema_version: 2.0           # required: the version of this schema
+schema_version: 2.1           # required: the version of this schema
 version: 1.4.0                # semver of this SDD document
 status: Active                # Draft | Active | Deprecated
 tdd: ./tdd/checkout-core.md   # the one TDD this SDD is derived from
@@ -75,7 +75,8 @@ Rules:
 * `status` lifecycle: `Draft` (being authored; units may be incomplete) → `Active` (living: built and maintained under §12) → `Deprecated` (retired; kept for history). There is no "Done": an Active SDD with all units Verified is simply fully built *at its current version*.
 * `tdd` and `tdd_version` MUST identify a single TDD revision: `tdd` is the TDD's path, written from the directory of the SDD's core file; `tdd_version` begins with the revision it pins. An SDD is `Active` only against the current revision of an `Approved` TDD (TDD schema, Document Metadata). Re-pinning to a newer TDD revision is a change entry.
 * `version` and `updated` MUST be those of the last change entry (§12): the version it goes to, and its date.
-* `schema_version` is required, and names the version of this schema the instance is written to: `2.0`. A reader MUST refuse an instance that declares a version it does not read, or declares none, naming the version it reads.
+* `schema_version` is required, and names the version of this schema the instance is written to: `2.1`. A reader MUST refuse an instance that declares a version it does not read, or declares none, naming the version it reads. A pin in `depends_on` (§8) is read only in a `2.1` document; every `2.0` document reads the same under `2.1`.
+* `shared_inputs` is optional: repository-relative paths or globs, outside every SDD's `scope_roots`, that this SDD's commands actually read (`shared_inputs: [tools/, ci/shared.env]`). It narrows which outside paths re-check this SDD's units (§11); without it, every path outside every scope counts, and a declared empty list excludes them all.
 * All dates are ISO `YYYY-MM-DD`.
 
 ---
@@ -309,6 +310,7 @@ trace: —                 # input hashes recorded at Built/Verified (§11)
 
 Rules:
 
+* **`depends_on`** names units of this SDD and pins of this SDD (schema 2.1; §7): a pin there means *wait until every unit on the `Producer:` line of the pin's authority is built*. A unit lists a pin in `depends_on` when it needs the **code** behind that surface (it imports or links it, installs its package, runs its CLI in its checks), and always in `consumes` as well: a pin in `depends_on` that is not in `consumes` is a defect. A pin it only reads as an interface or a data format stays in `consumes` alone and orders nothing. A transcription has no authority and an internal contract is produced by a unit of this SDD, so neither may appear in `depends_on`: name the unit instead.
 * **Requirements** use EARS forms — ubiquitous (`THE SYSTEM SHALL…`), event (`WHEN…`), state (`WHILE…`), option (`WHERE…`), unwanted behavior (`IF… THEN…`) — or Given/When/Then for scenario-shaped criteria. Each is singular, testable, and IDed.
 * **Implementation** names exact paths, exported signatures, algorithm steps, edge cases, and error behavior. It MAY include code skeletons. It states prohibitions ("do not…") where implementers predictably stray.
 * **Verification** maps every requirement ID to at least one exact command with a pass condition. A requirement with no check is a defect (traceability is total). A check need not be a test run: build output, a smoke run, and file or format checks are checks too (§10, Test posture). When the unit writes the tests its Verification runs, its Implementation MUST name each test and what it asserts — leaving that open is a choice left to the implementer (§4), who would then write its own exam.
@@ -333,7 +335,7 @@ Rules:
 * `depends_on` edges MUST form an acyclic graph. Cycles are authoring defects.
 * **Phase 0 is a foundation unit** (or units): repository scaffold, dependency installation and lockfile, the §5 Commands wired up, CI configuration. It blocks everything else; nothing is parallel with it.
 * Units in the same parallel group (`[P]`) MUST be mutually independent: no dependency path between them, and — by construction of §6 — disjoint owned paths. Any implementer MAY take any unclaimed Ready unit from the active group.
-* A unit is **claimable** when its status is Ready or Stale — or Claimed with a lapsed lease (§13) — and every unit in `depends_on` is Built or better.
+* A unit is **claimable** when its status is Ready or Stale — or Claimed with a lapsed lease (§13) — and every unit in `depends_on` is Built or better — for a pin in `depends_on`, every unit on the `Producer:` line of the pin's authority, in the producing SDD.
 * Groups SHOULD be ordered to produce a runnable end-to-end slice as early as possible (foundation → walking skeleton → breadth), not layer-by-layer completeness.
 
 ---
@@ -345,7 +347,7 @@ Gates are exact command sequences; passing them is the only way a unit advances.
 * **Unit gate** (working copy; Claimed → Built): bootstrap + build + the unit's full Verification table + lint, all exit 0.
 * **Write-set check** (before the merge): every path the work changed since its branch left mainline MUST lie in the unit's write-set (§13.3) — a path its `owns` globs match, or the unit's own entry changed only in its handoff fields `status`, `built` and `trace` (what stamping Built writes). Any other change rejects the work before it merges, even if otherwise green: a file the unit does not own (tests and `unmanaged` paths included), any other file of the SDD whatever an `owns` glob matches, or the unit's own spec text. The handoff commits every change git does not ignore, so build and test byproducts belong in `.gitignore`.
 * **Input check** (after the merge, before the gate): the trace recorded when the unit was stamped Built MUST equal the hashes of its inputs as mainline now holds them (§11). Work with no Built stamp is rejected. Work built from text that has since changed is not merged either, through no fault of its own: the unit returns to the pool and is rebuilt from the current text.
-* **Integration gate** (mainline; Built → Verified): after the unit's work merges: full build + the Verification tables of this unit **and every unit currently Verified** — which carry contract conformance — + the §5 Lint command + the §5 Test command as a regression check + drift-audit checks 1–3 (§11). The regression check: if Test passed on mainline before the merge, it MUST pass after it; while it already fails there — no tests yet, an earlier breakage — it judges no merge. A mainline that fails the integration gate MUST NOT be left failing: revert the merge or fix forward in the same integration session. Several Built units MAY be gated together — each merged on its own, the gate run once over the result — provided a red result is followed by gating them one at a time.
+* **Integration gate** (mainline; Built → Verified): after the unit's work merges: full build + the Verification tables of the merged units + the tables of this SDD's Verified units that a change has reached since their last recorded check (§11) — which carry contract conformance — or, when the SDD has no §5 Test command, the tables of **every** unit currently Verified + the §5 Lint command + the §5 Test command as a regression check + drift-audit checks 1–3 (§11). The regression check: if Test passed on mainline before the merge, it MUST pass after it; while it already fails there — no tests yet, an earlier breakage — it judges no merge. A mainline that fails the integration gate MUST NOT be left failing: revert the merge or fix forward in the same integration session. Several Built units MAY be gated together — each merged on its own, the gate run once over the result — provided a red result is followed by gating them one at a time.
 * **Fencing check.** The integration gate accepts work for unit U only if it presents U's **current** `claim_seq` and the lease is unexpired when the gate starts (§13). Work bearing a superseded token is rejected even if otherwise green — a delayed implementer whose claim lapsed and was re-claimed MUST NOT land.
 * Gate outcomes are recorded as the `built` / `verified` stamps (date, SDD version, commit) and the input `trace` (§11) in the unit's front matter, and as `built` / `verified` events appended to the journal in the integration commit (§11); raw command output SHOULD be retained where the repository keeps build evidence.
 * Verified is meaningful only at a version: a later change entry can return a Verified unit to Stale (§12).
@@ -369,7 +371,7 @@ Postures mix freely across units — acceptance tests written before the build a
 * **Only a test's owner may change it.** The write-set check rejects every other unit's change to it, and a test no unit owns is read-only for the entire build. Edits made outside the build are caught only when they make a Verified unit's checks fail (§11, check 4).
 * **Tests reach other units' code through contracts.** When a test owned by one unit imports a module another unit owns, the test's unit MUST consume a contract naming that module (§7) — which also stales the tests whenever the contract changes. The audit never reads code, so a boundary checker the SDD runs is what checks this (§5).
 * **Ready and Stale units are rebuilt by implementers.** Any Ready or Stale unit can be claimed, and its implementer may rewrite every file the unit owns. Tests that only the author may write therefore belong to a unit that is Verified when the build starts — when a change entry stales that unit, the author updates and re-stamps it before building resumes — or lie outside `scope_roots`.
-* **Verified checks keep passing.** A Verified unit's Verification commands run again at every build's preflight, at every later integration, and in the drift audit (§11, check 4), so they MUST pass in every later state — for a baseline, starting before the code its tests judge exists. A test unit or baseline whose tests judge other units' code is therefore verified with checks that hold both before and after that code exists (the tests load; they are lint-clean) — never with "the tests fail".
+* **Verified checks keep passing.** A Verified unit's Verification commands run again whenever a change reaches it since its last recorded check (§11) — at a build's preflight, at a later integration, in a re-check — at every later integration of an SDD with no §5 Test command, and in the drift audit (§11, check 4), so they MUST pass in every later state — for a baseline, starting before the code its tests judge exists. A test unit or baseline whose tests judge other units' code is therefore verified with checks that hold both before and after that code exists (the tests load; they are lint-clean) — never with "the tests fail".
 * **Absence fails.** A Verification command that runs tests SHOULD fail when the code it judges is absent: a test that skips instead lets a unit pass by not existing.
 * **Checks stand alone.** Verification commands — one unit's, and different units' — MAY be run in any order and side by side. Each SHOULD therefore pass on its own, whatever else is running: it relies on nothing another command leaves behind and changes nothing another reads (its own temp directories and ports; no shared scratch state). An SDD whose checks cannot be made independent says so in Ground Rules (§4), and its gates are run one command at a time.
 * **Tests-first is the unit's own instruction.** A unit MAY require tests-first: its Implementation says to run its Verification commands, observe them fail, then implement. The implementer carries this out; no gate observes or records the failing run.
@@ -415,6 +417,16 @@ trace:                   # SHA-256, hex, MAY be displayed truncated to 12 chars
 * Hashing is SHA-256 over UTF-8 bytes. The unit hash masks the volatile front-matter fields (`status`, `claimed_by`, `claim_expires`, `claim_seq`, `built`, `verified`, `trace`); everything else — including `depends_on`, `owns`, `consumes`, and the whole body — is content. No other normalization.
 * **Staleness is a hash comparison**: a unit is Stale iff any recorded trace hash differs from the current content's hash. The mismatching key names the cause ("stale because C-002 changed"). Change-entry marks (§12) are declared intent; the audit cross-checks the two.
 * A contract's hash is always over the consuming SDD's own entry for it. For a pin (§7) that is its own header with the `Pin:` line — and the pin is the hash of the authority's body, so the trace covers that body through it; for a transcription, its own text. A change to another SDD's contract therefore stales nothing until the pin is brought in step, which is why an out-of-step pin stops a build from starting rather than waiting for the audit.
+
+### Last recorded check
+
+A unit's **anchor** is the commit of its latest `verified` journal event, from an integration or from a re-check. It is part of build state, beside the trace, and answers a second question about a Verified unit: not "is what it is built from unchanged" but "is what it is checked against unchanged".
+
+* **The trace decides regeneration.** When a unit's trace moves (its entry, a consumed contract, the global regions), the unit is Stale and is built again.
+* **The anchor decides re-checking.** A Verified unit is re-checked, with no rebuild, when a path it is checked against changed since its anchor: its own files, the files of every unit in its `depends_on` closure (through pins too), its SDD's `unmanaged` files, and every path outside every SDD's scope — or, when its SDD lists `shared_inputs` (§2), only those outside paths. A passing re-check appends a `verified` event with the actor `recheck` and the checked commit, which moves the anchor and changes no unit's state.
+* The SDD's §5 Test command has an anchor of its own: the commit of the latest `audit` event that carries `suite: pass`, recorded by an integration or a re-check. Its recorded pass holds until a path that any unit of the SDD is checked against changes; then it runs again.
+* A unit regenerated into byte-identical files changes no path, so nothing that depends on it is re-checked.
+* The code of another unit never regenerates a unit: a unit is built from contracts, not from its dependencies' code. What a dependency's code change can break is whether the unit still passes its checks, which only a re-check answers.
 
 ### Build journal
 
@@ -473,6 +485,7 @@ Rules:
 * **No silent divergence.** Any integration that changes behavior beyond the spec without a change entry is an audit violation (§11.5). Spec and code move in the same change, not "code now, spec later".
 * **Backflow.** When building reveals the spec wrong or incomplete, the implementer reports it and edits no spec text — the write-set check (§10) rejects work that does. A correction confined to the claiming unit's own non-contract spec text MAY be landed by the integrator with that unit's integration, as a PATCH/MINOR entry recorded in the same change; anything touching contracts, §5, §6, or other units MUST stop at a `Q-###` and wait for an authored version (§3, §7).
 * **Changes that cross SDDs.** A change to a contract that other SDDs pin (§7) is a change entry of the producing SDD, and then — once each pin is brought in step (`vitrify pin sync`) — one change entry of each consuming SDD, with its own version bump and its own staleness marks. No SDD's entry marks another SDD's units.
+* Adding a pin to `depends_on` to record a need the unit's built code already has is editorial: PATCH. The pin is already in the unit's `consumes`, and the unit's code is unchanged.
 * Removing scope: retired units get status `Retired`; the change entry states what artifacts are deleted, and the deletion is executed at integration of that entry.
 * Growth is normal: new features arrive as new units and contracts under MINOR/MAJOR entries. The SDD is never "finished", only fully built at its current version.
 
@@ -511,6 +524,8 @@ Run before an SDD (or a new version of one) goes Active. Each line is pass/fail.
       Consumers line names exactly the units that consume it
 - [ ] Every pin matches the authority it names; every transcription
       names no contract, and says what it transcribes
+- [ ] Every pin whose code a unit needs is in its `depends_on`; a pin a unit
+      only reads as an interface or data stays in `consumes` alone
 - [ ] depends_on graph is acyclic; parallel groups are mutually independent
 - [ ] Every requirement ID is covered by ≥1 exact Verification command
 - [ ] Every unit is buildable from §4 + §5 + its own entry + its contracts alone

@@ -97,7 +97,65 @@ Work through these rules; each one maps to a check that runs later.
 - **Order execution foundation-first**, with `[P]` groups of mutually independent units.
 - **Record every consequential decision** as a citation of `TDD §n` or a `D-###` entry in the Decision Log.
 
-If the repository holds or will hold other SDDs, give this one its own `sdd:` slug and disjoint `scope_roots`, and consume other SDDs' surfaces through external contracts — see [Work With Several SDDs](multiple-sdds.md).
+If the repository holds or will hold other SDDs, give this one its own `sdd:` slug and disjoint `scope_roots`, and consume other SDDs' surfaces through external contracts — see [Work With Several SDDs](multiple-sdds.md). A plain `vitrify run` builds every SDD of a repository as one project run, so an SDD that sits beside others is also written to the rules in [Write the SDD for a Project Run](#write-the-sdd-for-a-project-run).
+
+### Write the SDD for a Project Run
+
+A project run schedules every SDD's units as one graph, and it follows only what the spec declares: `depends_on` orders units and carries code, `consumes` names the contracts a unit reads and orders nothing, and the re-check cascade follows `depends_on` edges alone. [Build State](../about/concepts/build-state.md#the-two-cascades) explains the two cascades. These rules keep the declarations true; each maps to a check that runs later.
+
+#### Classify Each Pin a Unit Consumes
+
+For every pin a unit consumes, decide what the unit takes from it:
+
+| The unit | The pin goes in |
+| --- | --- |
+| imports or links the other SDD's code, installs its package, or runs its CLI in tests: it needs the built code | `consumes` and `depends_on` |
+| codes against the surface as an interface, or parses it as a data format | `consumes` only |
+
+```yaml
+consumes:   [C-001, C-012]   # C-012 is this SDD's pin of core's C-010: the interface
+depends_on: [U-001, C-012]   # and wait until the code behind it is built
+```
+
+A pin in `depends_on` makes the unit wait until every unit on the authority's `Producer:` line is built, and makes the unit re-check when those units' code changes. A pin left out of it builds beside its producer. Write `schema_version: 2.1` in the core front matter, since a pin in `depends_on` is a lint L1 finding under 2.0, and name only pins this SDD consumes: neither a transcription (it has no authority) nor an internal contract (name the unit instead) belongs there. Pins running both ways between two SDDs are normal; a cycle through `depends_on` is refused.
+
+#### Make Each Package Boundary a Contract
+
+An SDD whose code other SDDs install or import publishes a contract for its package surface, produced by its foundation unit. A consuming SDD's foundation unit lists that pin in `depends_on`. Every unit depends on its SDD's foundation, so a change to the foundation's files (lockfile, build configuration, scaffold) re-checks every unit, as a lockfile change rebuilds everything in Cargo.
+
+#### Keep Commands Working While Upstreams Are Partly Built
+
+The §5 Bootstrap, Build, and Lint commands must run clean before anything is built, and tests must skip until their subject exists. Those rules hold while upstream SDDs are partly built, too: guard a command on the presence of what it needs rather than refusing when an upstream's output is absent.
+
+#### Keep a Whole-Suite Test Command
+
+The re-check cascade runs only the Verification rows of the units a change reaches. The §5 Test command runs at every gate and catches coupling the declarations miss, so give the SDD one that runs the whole suite. An SDD with `none` falls back to re-running every row at every gate: correct, and slow.
+
+#### Write Rows That Exercise What a Unit Uses
+
+Re-checking a unit runs its Verification rows, so those rows must exercise the unit's own behavior, including what it takes from the units it depends on. A dependency change that breaks the unit should then fail one of its rows. A row that checks nothing a dependency touches makes the re-check vacuous.
+
+#### Make Every Command Safe Beside Other SDDs' Commands
+
+Unit checks must be runnable concurrently: temporary directories, ephemeral ports, no shared databases or global fixtures. The rule covers every §5 command and holds across SDDs, because gates of different SDDs run at once. A runner that fans out across every core on its own should cap itself, since each command or row takes one token of the gate pool (`run.gate_jobs`).
+
+#### Reproduce Upstream Outputs in Every Checkout
+
+Each lane builds and gates in its own pristine checkout of mainline, with no untracked or ignored file. Anything a downstream SDD needs from an upstream must be committed by the upstream's units, or rebuilt by the downstream's Bootstrap from the upstream's sources; nothing may rely on an artifact left in another checkout. Keep tool caches outside the checkout, and share only caches keyed by the hashes of their inputs.
+
+#### Give Repository-Wide Inputs an Owner, or Declare Them
+
+A file outside every SDD's `scope_roots` is an input of every unit by default, so a change to it re-checks everything. Place shared build inputs under an SDD that the others depend on; or declare, in the SDD's core front matter, the outside paths its commands actually read:
+
+```yaml
+shared_inputs: [tools/, ci/shared.env]   # repository-relative paths or globs
+```
+
+With the key present, only the outside paths it matches re-check the SDD's units. The [Data Model and Formats Specification](../reference/formats.md#33-sdd-front-matter-shared_inputs) defines it.
+
+#### Keep the Declarations Complete and Enforced
+
+A cascade can follow only declared dependencies, and declarations are often wrong. Pin a boundary checker whose allowed cross-unit and cross-SDD imports match `depends_on`, and run it as the Lint command or as a Verification row, so the unit that adds an undeclared import fails its own gate. `vitrify locate --graph --json` prints the declared edges, so the checker's allowlist can be generated from them or compared against them.
 
 **Worked reference:** [`fixtures/example/specs/calc/`](../../fixtures/example/specs/calc/sdd.md).
 
@@ -135,7 +193,7 @@ Run the authoring checks until they pass:
 vitrify lint
 ```
 
-`lint` runs the eleven mechanical checks, L1–L11, and prints `lint clean (L1–L11)` with exit 0 when the SDD passes, or one `[L#] subject: cause → remediation` line per finding with exit 2. If you shipped an authored baseline, use `vitrify lint --built`: plain lint's L7 reports any build state, and a baseline is build state. The [Troubleshooting Guide](../resources/troubleshooting.md#vitrify-lint-reports-findings) maps each check to its usual fix.
+`lint` runs the twelve mechanical checks, L1–L12, and prints `lint clean (L1–L12)` with exit 0 when the SDD passes, or one `[L#] subject: cause → remediation` line per finding with exit 2. If you shipped an authored baseline, use `vitrify lint --built`: plain lint's L7 reports any build state, and a baseline is build state. The [Troubleshooting Guide](../resources/troubleshooting.md#vitrify-lint-reports-findings) maps each check to its usual fix.
 
 Then set `status: Active` in the SDD's front matter and commit everything at the mainline head.
 
@@ -146,10 +204,11 @@ Run the same preflight that `vitrify run` and kickoff will enforce:
 ```sh
 vitrify check
 vitrify locate --units
+vitrify locate --graph
 vitrify run --dry-run
 ```
 
-`vitrify check` runs lint, the audit, the journal replay where a journal exists, the ledger check, and the pin states in one call, and exits 0 when all are clean. `vitrify run --dry-run` runs the whole preflight — including the SDD's §5 Bootstrap, Build, and Lint commands from the repository root — prints the plan, and ends with the `Start:` line that starts the build. The Test command does not gate the start.
+`vitrify check` runs lint, the audit, the journal replay where a journal exists, the ledger check, and the pin states in one call, and exits 0 when all are clean. `vitrify locate --graph` prints the SDD graph with the pins and unit edges behind each edge, so the edges you declared can be read back. `vitrify run --dry-run` runs the whole preflight — including the SDD's §5 Bootstrap, Build, and Lint commands from the repository root — prints the plan, and ends with the `Start:` line that starts the build. The Test command does not gate the start.
 
 ## Check the Result
 
@@ -158,7 +217,7 @@ The spec is ready to build when every check below passes. Use this table as the 
 | Check | Evidence |
 | --- | --- |
 | The TDD is Approved | its metadata names `Approved` and the revision the SDD pins |
-| Lint is clean | `vitrify lint` (or `--built` with a baseline) prints `lint clean (L1–L11)` and exits 0 |
+| Lint is clean | `vitrify lint` (or `--built` with a baseline) prints `lint clean (L1–L12)` and exits 0 |
 | The repository is consistent | `vitrify check` prints `check clean: 1 SDD` and exits 0 |
 | Phase 1 is claimable | `vitrify locate --units` marks exactly the Phase-1 units `claimable` |
 | The preflight passes | `vitrify run --dry-run` exits 0 and ends with its `Start:` line |

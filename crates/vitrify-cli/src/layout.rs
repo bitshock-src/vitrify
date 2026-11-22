@@ -2,7 +2,7 @@
 //!
 //! Two places. `<repo>/.vitrify/` is scratch nothing is ever built in:
 //! transaction worktrees, logs, `run.json`, the repo-level config. The unit
-//! worktrees and the integration checkout — where workers build and gate
+//! worktrees and the integration checkouts — where workers build and gate
 //! commands run — live **outside the working tree**, by default under the
 //! vitrify home, so that no ignore file of the repository (its own
 //! `.gitignore`, or the `*` vitrify writes into `.vitrify/`) is an ancestor
@@ -11,6 +11,9 @@
 //!
 //! Branch and worktree names carry the SDD's slug: several SDDs in one
 //! repository all have a `U-001`, and their work must never share a name.
+//! So do a run's lanes — one per SDD: each has its own integration
+//! checkout and lock, its own head checkout, and its own records under the
+//! job's logs, so runs of different SDDs never wait on each other's gate.
 
 use std::path::{Path, PathBuf};
 
@@ -27,7 +30,7 @@ pub struct Layout {
     pub primary: PathBuf,
     /// `<primary>/.vitrify` — transactions, logs, `run.json`.
     pub scratch: PathBuf,
-    /// Root of the unit worktrees and the integration checkout.
+    /// Root of the unit worktrees and the integration checkouts.
     pub wt_root: PathBuf,
 }
 
@@ -69,14 +72,42 @@ impl Layout {
         }
     }
 
-    /// The integration checkout: a detached worktree of the mainline head.
-    pub fn mainline(&self) -> PathBuf {
-        self.wt_root.join("mainline")
+    /// The integration checkout of the SDD `slug`: a detached worktree of
+    /// the mainline head, where its gates and §5 commands run.
+    pub fn mainline(&self, slug: &str) -> PathBuf {
+        self.wt_root.join(format!("mainline-{slug}"))
     }
 
-    /// The lock that makes integration serial across processes.
-    pub fn mainline_lock(&self) -> PathBuf {
-        self.wt_root.join("mainline.lock")
+    /// The lock on that checkout: runs of one SDD gate one at a time,
+    /// across processes; runs of different SDDs gate side by side. (A slug
+    /// never ends in `.lock`, so no checkout is ever named like a lock.)
+    pub fn mainline_lock(&self, slug: &str) -> PathBuf {
+        self.wt_root.join(format!("mainline-{slug}.lock"))
+    }
+
+    /// The checkout where the lane of the SDD `slug` runs a gate's failing
+    /// rows again on the gate's base, apart from its integration checkout.
+    pub fn base_checkout(&self, slug: &str) -> PathBuf {
+        self.wt_root.join(format!("base-{slug}"))
+    }
+
+    /// This process's detached checkout of the mainline head for the SDD
+    /// `slug`, where the run reads spec state.
+    pub fn head_checkout(&self, slug: &str) -> PathBuf {
+        self.scratch
+            .join(format!("tx-{}-{slug}-head", std::process::id()))
+    }
+
+    /// `.vitrify/logs/<job>/`: the job's own records — its `run.json`,
+    /// `project.json`, `events.jsonl` and final report.
+    pub fn job_logs(&self, job: &str) -> PathBuf {
+        self.scratch.join("logs").join(job)
+    }
+
+    /// `.vitrify/logs/<job>/<slug>/`: one lane's records — its worker logs
+    /// and prompts, its gate board, its escalations.
+    pub fn lane_logs(&self, job: &str, slug: &str) -> PathBuf {
+        self.job_logs(job).join(slug)
     }
 
     /// One claim's worktree.
@@ -255,7 +286,25 @@ mod tests {
             l.unit_worktree("shop-cart", "U-001", 3),
             PathBuf::from("/w/shop-cart-U-001-c3")
         );
-        assert_eq!(l.mainline(), PathBuf::from("/w/mainline"));
+        assert_eq!(
+            l.mainline("shop-cart"),
+            PathBuf::from("/w/mainline-shop-cart")
+        );
+        assert_eq!(
+            l.mainline_lock("shop-cart"),
+            PathBuf::from("/w/mainline-shop-cart.lock")
+        );
+        assert_eq!(
+            l.lane_logs("run-x", "shop-cart"),
+            PathBuf::from("/r/.vitrify/logs/run-x/shop-cart")
+        );
+        assert_eq!(
+            l.head_checkout("shop-cart"),
+            PathBuf::from(format!(
+                "/r/.vitrify/tx-{}-shop-cart-head",
+                std::process::id()
+            ))
+        );
         assert!(l.in_tree().is_none());
         assert_eq!(
             Layout::at(Path::new("/r"), Path::new("/r/wt")).in_tree(),

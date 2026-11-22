@@ -37,7 +37,7 @@ Use this table to see what each part holds and who writes it.
 | --- | --- | --- |
 | `unit`, `title` | the ID (`U-###`) and name | author |
 | `status` | the unit's place in its lifecycle (below) | author, then vitrify |
-| `depends_on` | units that must be Built or Verified before this one can be claimed | author |
+| `depends_on` | units, or pins of this SDD (schema 2.1; each stands for the units that produce it in another SDD), that must be Built or Verified before this one can be claimed | author |
 | `parallel_group` | the authored group of mutually independent units, if any | author |
 | `owns` | the exclusive write-set globs | author |
 | `consumes` | the contract IDs it reads | author |
@@ -60,6 +60,31 @@ Ownership is also the write rule. A unit's **write-set** is what its `owns` glob
 `depends_on` forms an acyclic graph (lint L1), ordered foundation-first: a foundation phase blocks everything after it. A **parallel group**, written `[P]` in Execution Order and `parallel_group` in front matter, records the author's plan for units that can run together, and lint L3 holds group members to independence.
 
 The scheduler uses `depends_on` alone. Any two claimable units are independent by construction — neither depends on the other, each has its dependencies built, and ownership is exclusive — so `vitrify run` starts a unit as soon as it is claimable and a worker slot is free, whatever its group. In calc, U-002 builds first; U-003 and U-004 then build side by side; U-005 follows.
+
+### Depending on Another SDD
+
+`depends_on` may name a **pin** of the unit's own SDD (schema 2.1), as well as units. A pin there means: wait until every unit on the `Producer:` line of the pin's authority, in the SDD that owns it, is built. The unit still writes only its own IDs, and the pin stays the one handle between the SDDs.
+
+```yaml
+consumes:   [C-001, C-012]   # C-012 is this SDD's pin of core's C-010: the interface
+depends_on: [U-001, C-012]   # and wait until the code behind it is built
+```
+
+List a pin in `depends_on` when the unit needs the other SDD's **built code**: it imports or links it, installs its package, or runs its CLI in its checks. It must be in `consumes` as well. A pin the unit only reads, as an interface or a data format, stays in `consumes` alone: it orders nothing, so the unit builds while the producer is still building. Two SDDs whose units read each other's contracts as interfaces are normal and need no ordering. A transcription has no authority, and an internal contract is produced by a unit of this SDD, so neither may appear in `depends_on`: name the unit instead. See [Contracts](contracts.md#pins-carry-order-too).
+
+A `schema_version: 2.0` SDD may not list a pin in `depends_on`, and a project run refuses one whose units consume pins; see [Runs](runs.md#what-a-run-is).
+
+### One Graph Across SDDs
+
+A run joins the units of every SDD into one graph. Its nodes are a unit in an SDD, and its edges are the `depends_on` entries, with a pin leading to the units that produce its authority. The graph is ordered by Kahn's algorithm [kahn], and it is validated before anything runs: every entry must resolve, every authority must name producer units, and there must be no cycle.
+
+A cycle through `depends_on` is refused, and **every** cycle is reported, each as the path that closes it, with SDD slugs:
+
+```text
+core U-004 → api U-002 → core U-006 → core U-004
+```
+
+Kahn's order leaves exactly the units that are on a cycle or wait behind one, and Tarjan's algorithm [tarjan] tells them apart: the units that only wait behind a cycle are named as waiting, not as part of it. Lint L1 checks the entries of one SDD, and L12 checks the authorities and reports the cycles that run through pins.
 
 ## Reading Set
 
@@ -108,7 +133,7 @@ Under `vitrify run`, a worker stamps its unit Built in its own worktree. The sta
 
 ## Claimable
 
-A unit is **claimable** when every `depends_on` unit is Built or Verified, and the unit is Ready, Stale, or Claimed with a lapsed lease. The predicate is derived from front matter and never stored. `vitrify locate --units` marks each claimable unit; with `--json` it adds each dependency's status, the holder, the lease expiry, and whether the lease is still live.
+A unit is **claimable** when every `depends_on` unit is Built or Verified — for a pin, every unit that produces the pin's authority, in the SDD that owns it — and the unit is Ready, Stale, or Claimed with a lapsed lease. A unit that is blocked, set aside, or rotten never counts as built, so only the units that depend on it, in any SDD, wait. The predicate is derived from front matter and never stored. `vitrify locate --units` marks each claimable unit; with `--json` it adds each dependency's status, the holder, the lease expiry, and whether the lease is still live.
 
 ## Limitations
 
@@ -124,5 +149,5 @@ These are the boundaries of what vitrify judges about a unit.
 - Write the Verification row for each requirement as you write the requirement: every `U-###.R<n>` must appear in a row (lint L6).
 - Keep ownership exclusive with narrow globs, and list generated or shared files under `unmanaged:`.
 - Put every shared surface in a contract, never in another unit's Implementation block.
-- Add a `depends_on` edge only for a real build-order need; every extra edge serializes the build.
+- Add a `depends_on` edge only for a real build-order need; every extra edge serializes the build. Across SDDs, list a pin there only when the unit needs the other SDD's built code, never for a surface it only reads.
 - Never edit status, stamps, or traces by hand; the state verbs keep them consistent with the journal.

@@ -1,8 +1,23 @@
 //! Journal: append-only NDJSON event log, held to the golden corpus
 //! (`fixtures/golden/`). One compact JSON object per line, separators
 //! `(",", ":")`, non-ASCII unescaped, insertion key order `seq, at, event,
-//! [unit], [actor], [claim_seq], [entry], [stale], [cause], [findings], sdd,
-//! [commit]`.
+//! [unit], [actor], [claim_seq], [entry], [stale], [cause], [findings],
+//! [suite], sdd, [commit]`.
+//!
+//! Two optional marks serve the re-check cascade ([`crate::cascade`]), and
+//! neither changes the closed event vocabulary or the replay rules:
+//!
+//! * a `verified` event may carry actor [`RECHECK_ACTOR`]: a re-check of a
+//!   unit that is already Verified, recorded with a fresh `verified:` stamp
+//!   (a volatile field, masked from traces). Replay sets Verified over
+//!   Verified, so the projection does not move; it is never a finding. The
+//!   event's `commit` is the unit's new anchor;
+//! * an `audit` event may carry `suite`: [`SUITE_PASS`] says the SDD's §5
+//!   Test command passed at the event's `commit`. Only `pass` is written
+//!   today; the field is free text, so a later value never breaks reading.
+//!
+//! Both are skipped when absent, so every journal written before them reads,
+//! replays and renders byte for byte as it did.
 
 use std::path::PathBuf;
 
@@ -15,6 +30,14 @@ use crate::model::{self, SddHandle, Shape, Unit};
 pub const EVENTS: [&str; 9] = [
     "claim", "renew", "release", "built", "verified", "stale", "retired", "change", "audit",
 ];
+
+/// The actor of a `verified` event that records a re-check: no model call,
+/// no claim — the unit's Verification rows ran again and passed.
+pub const RECHECK_ACTOR: &str = "recheck";
+
+/// The `suite` value of an `audit` event whose commit passed the SDD's §5
+/// Test command.
+pub const SUITE_PASS: &str = "pass";
 
 /// One journal event. Field declaration order IS the key order —
 /// serde emits struct fields in declaration order (Conventions: normative
@@ -41,6 +64,10 @@ pub struct Event {
     pub cause: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub findings: Option<i64>,
+    /// `audit` events only: the outcome of the SDD's §5 Test command at
+    /// `commit` ([`SUITE_PASS`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suite: Option<String>,
     #[serde(default)]
     pub sdd: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -195,6 +222,19 @@ pub struct Projection {
     pub order_findings: Vec<String>,
 }
 
+impl Event {
+    /// Whether this is a `verified` event that records a re-check of a unit
+    /// that was already Verified ([`RECHECK_ACTOR`]).
+    pub fn is_recheck(&self) -> bool {
+        self.event == "verified" && self.actor.as_deref() == Some(RECHECK_ACTOR)
+    }
+
+    /// Whether this is an `audit` event recording a passing §5 Test command.
+    pub fn is_suite_pass(&self) -> bool {
+        self.event == "audit" && self.suite.as_deref() == Some(SUITE_PASS)
+    }
+}
+
 impl Projection {
     pub fn status_of(&self, unit: &str) -> Option<&str> {
         self.status
@@ -242,6 +282,8 @@ pub fn replay(events: &[Event]) -> Projection {
             ("renew", _) => {}
             ("release", Some(u)) => proj.set_status(u, "Ready"),
             ("built", Some(u)) => proj.set_status(u, "Built"),
+            // a re-check (actor `recheck`) is a `verified` over Verified:
+            // the status does not move, and it is no finding
             ("verified", Some(u)) => proj.set_status(u, "Verified"),
             ("stale", Some(u)) => proj.set_status(u, "Stale"),
             ("retired", Some(u)) => proj.set_status(u, "Retired"),

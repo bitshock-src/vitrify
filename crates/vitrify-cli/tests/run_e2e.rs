@@ -350,7 +350,7 @@ fn complete_with_the_evidence_triple() {
     assert!(!r.root.join(".vitrify/worktrees").exists());
     assert!(!r.root.join(".vitrify/mainline").exists());
     let wt = r.worktrees();
-    assert!(wt.join("mainline/src/one.txt").exists());
+    assert!(wt.join("mainline-mini/src/one.txt").exists());
     assert!(
         workers[0]["worktree"]
             .as_str()
@@ -845,14 +845,14 @@ fn borrowed<'a>(env: &'a [(&'static str, String)]) -> Vec<(&'a str, &'a str)> {
 fn a_repository_with_several_sdds_builds_each_by_its_sdd_flag() {
     let r = rig_of("run-multi");
 
-    // no --sdd: refused before anything starts, the candidates listed
-    let (code, _, stderr) = r.run(&["run", "--dry-run"], &[]);
-    assert_eq!(code, 2);
+    // no --sdd: a project run, one lane per SDD
+    let (code, stdout, stderr) = r.run(&["run", "--dry-run"], &[]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
     assert!(
-        stderr.contains("multiple SDDs found; pass --sdd <root>"),
-        "{stderr}"
+        stdout.starts_with("Project build job — 2 SDDs: "),
+        "{stdout}"
     );
-    assert!(stderr.contains("specs/alpha") && stderr.contains("specs/beta"));
+    assert!(stdout.contains("specs/alpha") && stdout.contains("specs/beta"));
 
     // alpha, with its U-001 blocked: the SDD named in preflight is the SDD
     // of every later step — the claim, the worker's own verbs, the gate
@@ -1292,7 +1292,8 @@ fn a_retry_starts_from_the_last_attempt_and_is_told_why_it_failed() {
 
     // the second worker was handed the first one's file and its failure
     let job = r.run_json()["job_id"].as_str().unwrap().to_string();
-    let logs = r.root.join(".vitrify/logs").join(&job);
+    // a lane's records: under the job's, in a directory named by its slug
+    let logs = r.root.join(".vitrify/logs").join(&job).join("mini");
     let prompt = std::fs::read_to_string(logs.join(format!("worker-{job}-w3.prompt.md"))).unwrap();
     assert!(prompt.contains("## This session"), "{prompt}");
     assert!(
@@ -1450,7 +1451,8 @@ fn workers_never_share_a_tmpdir_while_they_run() {
     );
     assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
     let job = r.run_json()["job_id"].as_str().unwrap().to_string();
-    let logs = r.root.join(".vitrify/logs").join(&job);
+    // a lane's records: under the job's, in a directory named by its slug
+    let logs = r.root.join(".vitrify/logs").join(&job).join("mini");
     let tmp_of = |w: &str| {
         let err = std::fs::read_to_string(logs.join(format!("worker-{job}-{w}.err"))).unwrap();
         err.lines()
@@ -1484,6 +1486,7 @@ fn a_streamed_session_is_logged_as_it_happens_and_its_report_found() {
         r.root
             .join(".vitrify/logs")
             .join(&job)
+            .join("mini")
             .join(format!("worker-{job}-w1.out")),
     )
     .unwrap();
@@ -1722,6 +1725,7 @@ fn a_spec_change_mid_run_rebuilds_what_it_touched() {
         r.root
             .join(".vitrify/logs")
             .join(&job)
+            .join("mini")
             .join(format!("worker-{job}-w3.prompt.md")),
     )
     .unwrap();
@@ -2249,11 +2253,14 @@ fn fixture_env(fixture: &str, which: &str) -> [(&'static str, String); 2] {
 /// The prompt the last worker dispatched for `unit` was started with.
 fn last_prompt(r: &Rig, unit: &str) -> String {
     let mut found: Vec<(std::time::SystemTime, String)> = Vec::new();
-    for job in std::fs::read_dir(r.root.join(".vitrify/logs"))
+    // each job's lanes keep their workers' prompts in a directory of their own
+    let lanes = std::fs::read_dir(r.root.join(".vitrify/logs"))
         .unwrap()
         .flatten()
-    {
-        for entry in std::fs::read_dir(job.path()).unwrap().flatten() {
+        .flat_map(|job| std::fs::read_dir(job.path()).unwrap().flatten())
+        .filter(|entry| entry.path().is_dir());
+    for lane in lanes {
+        for entry in std::fs::read_dir(lane.path()).unwrap().flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if !name.ends_with(".prompt.md") {
                 continue;
@@ -2542,6 +2549,677 @@ fn a_single_file_sdd_builds_through_its_pin() {
             .contains("specs/alpha/contracts/C-001-greeting.md  ::  Surface onward\n\n## Surface"),
         "{prompt}"
     );
+}
+
+// ------------------------------------------------------------- kept work
+
+/// Start a run whose U-001 gate waits in a slow row, let both units report
+/// built, and interrupt it: both attempts are built and never landed. The
+/// row passes at once from then on.
+fn interrupt_after_built(r: &Rig) {
+    edit(
+        r,
+        "specs/mini/units/U-001-one.md",
+        "`test -f src/one.txt`",
+        // (no `|` in a row: it would end the table cell)
+        "`sh -c 'if [ ! -e ../release ]; then touch ../gate-started; sleep 60; fi; test -f src/one.txt'`",
+    );
+    git(&r.root, &["commit", "-q", "-am", "a row that waits once"]);
+    let bg = r.start(&["run", "--cap", "2"], &[]);
+    wait_for("both units built, U-001 in its gate", || {
+        let built = |u: &str| {
+            r.run_json()["workers"].as_array().is_some_and(|ws| {
+                ws.iter()
+                    .any(|w| w["unit"] == u && w["outcome"] == "integrating")
+            })
+        };
+        built("U-001")
+            && built("U-002")
+            && std::fs::read_dir(r.home.join("worktrees"))
+                .map(|d| d.flatten().any(|e| e.path().join("gate-started").exists()))
+                .unwrap_or(false)
+    });
+    bg.signal("-INT");
+    let (status, stdout, stderr) = bg.finish();
+    assert_eq!(
+        status.signal(),
+        Some(2),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    std::fs::write(r.worktrees().join("release"), "").unwrap();
+}
+
+#[test]
+fn a_built_attempt_an_interrupted_run_left_lands_with_no_worker() {
+    let r = rig();
+    interrupt_after_built(&r);
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &[]);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    for unit in ["U-001", "U-002"] {
+        assert!(
+            stdout.contains(&format!("[mini] {unit} adopted (built attempt c1) → gate")),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains(&format!("integrated {unit} (c2)")),
+            "{stdout}"
+        );
+    }
+    // no worker session at all
+    assert!(!stdout.contains("dispatch "), "{stdout}");
+    for w in r.run_json()["workers"].as_array().unwrap() {
+        assert_eq!(w["pid"], 0, "{w}");
+        assert!(
+            w["holder"].as_str().unwrap().ends_with("-a1")
+                || w["holder"].as_str().unwrap().ends_with("-a2")
+        );
+    }
+    assert!(stdout.contains("Complete."), "{stdout}");
+}
+
+#[test]
+fn a_built_attempt_whose_inputs_moved_goes_to_a_worker() {
+    let r = rig();
+    interrupt_after_built(&r);
+    // U-001's text changes after its attempt was built
+    edit(
+        &r,
+        "specs/mini/units/U-001-one.md",
+        "with the frozen content.",
+        "with the frozen content, and nothing else.",
+    );
+    git(&r.root, &["commit", "-q", "-am", "U-001 says more"]);
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &[]);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stdout.contains("dispatch U-001 (c2) → w1  [retry]"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("[mini] U-002 adopted (built attempt c1) → gate"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("U-001 adopted"), "{stdout}");
+    assert!(stdout.contains("Progress: 2/2 Verified"), "{stdout}");
+}
+
+#[test]
+fn recheck_runs_every_row_again_and_still_adopts() {
+    let r = rig();
+    let counter = r._tmp.path().join("u2-rows");
+    edit(
+        &r,
+        "specs/mini/units/U-002-two.md",
+        "`test -f src/two.txt`",
+        &format!(
+            "`sh -c 'echo ran >> {}; test -f src/two.txt'`",
+            counter.display()
+        ),
+    );
+    git(
+        &r.root,
+        &["commit", "-q", "-am", "U-002's row counts its runs"],
+    );
+    interrupt_after_built(&r);
+    // --recheck rebuilds nothing, and still adopts what was built
+    let (code, stdout, stderr) = r.run(&["run", "--recheck"], &[]);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stdout.contains("U-001 adopted (built attempt c1)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("U-002 adopted (built attempt c1)"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("dispatch "), "{stdout}");
+
+    let runs = || {
+        std::fs::read_to_string(&counter)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+    // with nothing to build, a run trusts the check preflight just made
+    let before = runs();
+    let (code, stdout, _) = r.run(&["run"], &[]);
+    assert_eq!(code, 0, "{stdout}");
+    let trusted = runs() - before;
+    // --recheck checks the head again: every row, and the §5 Test command
+    let before = runs();
+    let (code, stdout, stderr) = r.run(&["run", "--recheck"], &[]);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    let rechecked = runs() - before;
+    assert!(
+        rechecked > trusted,
+        "rows ran {rechecked} times, {trusted} without --recheck"
+    );
+    assert!(stdout.contains("§5 Test: exit 0 (true)"), "{stdout}");
+    assert!(!stdout.contains("dispatch "), "{stdout}");
+    assert!(stdout.contains("Complete."), "{stdout}");
+}
+
+#[test]
+fn a_row_broken_on_mainline_rots_its_unit_names_the_culprit_and_holds_its_dependents() {
+    // U-003 depends on U-001 and U-002. U-001 lands; U-002 waits on a
+    // question. Then, while U-002 is being built again, a commit on
+    // mainline breaks U-001's row. U-002's gate finds the row failing on
+    // its base too: U-001 is rotten, U-002 lands all the same (it broke
+    // nothing), the culprit is named, and U-003 waits.
+    let r = rig();
+    edit(
+        &r,
+        "specs/mini/units/U-001-one.md",
+        "`test -f src/one.txt`",
+        "`grep -qx one src/one.txt`",
+    );
+    let two = std::fs::read_to_string(r.root.join("specs/mini/units/U-002-two.md")).unwrap();
+    std::fs::write(
+        r.root.join("specs/mini/units/U-003-three.md"),
+        two.replace("U-002", "U-003")
+            .replace("two.txt", "three.txt")
+            .replace("depends_on: []", "depends_on: [U-001, U-002]")
+            .replace("parallel_group: a", "parallel_group: —"),
+    )
+    .unwrap();
+    git(&r.root, &["add", "-A"]);
+    git(&r.root, &["commit", "-q", "-m", "U-003 after both"]);
+    let solution = r._tmp.path().join("solution");
+    copy_dir(
+        &repo_root().join("fixtures/seeded/run-mini/solution"),
+        &solution,
+    );
+    std::fs::write(solution.join("src/three.txt"), "three\n").unwrap();
+    let map = r._tmp.path().join("stub-map.toml");
+    std::fs::write(
+        &map,
+        "[units]\nU-001 = [\"src/one.txt\"]\nU-002 = [\"src/two.txt\"]\nU-003 = [\"src/three.txt\"]\n",
+    )
+    .unwrap();
+    let (solution, map) = (solution.display().to_string(), map.display().to_string());
+    let env = [("STUB_REF", solution.as_str()), ("STUB_MAP", map.as_str())];
+
+    let mut first = env.to_vec();
+    first.push(("STUB_BLOCK_UNIT", "U-002"));
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "1"], &first);
+    assert_eq!(code, 2, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("integrated U-001 (c1)"), "{stdout}");
+
+    let steps = r._tmp.path().join("steps");
+    std::fs::create_dir_all(&steps).unwrap();
+    let steps_s = steps.display().to_string();
+    let mut second = env.to_vec();
+    second.push(("STUB_STEPS", steps_s.as_str()));
+    let bg = r.start(&["run", "--cap", "1"], &second);
+    wait_for("U-002's worker to start", || {
+        steps.join("U-002-c2.start").exists()
+    });
+    std::fs::write(r.root.join("src/one.txt"), "broken\n").unwrap();
+    git(&r.root, &["commit", "-q", "-am", "break one"]);
+    let culprit = git(&r.root, &["rev-parse", "--short=7", "HEAD"]);
+    for point in ["start", "stamp", "report"] {
+        std::fs::write(steps.join(format!("U-002-c2.{point}.go")), "").unwrap();
+    }
+    let (status, stdout, stderr) = bg.finish();
+    assert_eq!(
+        status.code(),
+        Some(2),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // the batch broke nothing: it landed
+    assert!(stdout.contains("integrated U-002 (c2)"), "{stdout}");
+    assert!(
+        stdout.contains("[mini] U-001 rotten: row 1 fails on"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "[mini] U-001 row 1 broke at {culprit} (changed mini U-001) — culprit found"
+        )),
+        "{stdout}"
+    );
+    // the report names the rotten unit with its culprit, and what waits on it
+    assert!(stdout.contains("Blocked."), "{stdout}");
+    assert!(
+        stdout
+            .contains("  U-001: rotten — row 1: `grep -qx one src/one.txt` fails on mainline too;"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("  U-003: waits on U-001 (rotten)"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("dispatch U-003"), "{stdout}");
+    // never rebuilt
+    assert!(!stdout.contains("dispatch U-001"), "{stdout}");
+}
+
+// ------------------------------------------------- dependencies across SDDs
+
+#[test]
+fn a_downstream_sdd_waits_for_its_upstream_producers() {
+    let r = rig_of("project-pipeline");
+    let api = fixture_env("project-pipeline", "api");
+    // core has built nothing: api's units wait on core's, and say so
+    let (code, stdout, stderr) = r.run(&["run", "--sdd", "specs/api"], &borrowed(&api));
+    assert_eq!(code, 2, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(!stdout.contains("dispatch "), "{stdout}");
+    assert!(
+        stdout.contains("  U-001: waits on core U-001, outside this run"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("  U-002: waits on core U-002, outside this run"),
+        "{stdout}"
+    );
+    // once core is built, api builds
+    let core = fixture_env("project-pipeline", "core");
+    let (code, stdout, stderr) = r.run(&["run", "--sdd", "specs/core"], &borrowed(&core));
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    let (code, stdout, stderr) = r.run(&["run", "--sdd", "specs/api"], &borrowed(&api));
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("Progress: 3/3 Verified"), "{stdout}");
+}
+
+// ------------------------------------------------------- the re-check cascade
+
+/// run-mini with a third unit, U-003, shipping `src/three.txt` and depending
+/// on `three_deps`; each unit's row also counts its runs in `<tmp>/ran-<n>`.
+/// Returns the stub's environment, with `src/one.txt` built as `one`.
+fn with_unit_three(r: &Rig, three_deps: &str, one: &str) -> Vec<(String, String)> {
+    let two = std::fs::read_to_string(r.root.join("specs/mini/units/U-002-two.md")).unwrap();
+    let three: Vec<String> = two
+        .replace("U-002", "U-003")
+        .replace("two.txt", "three.txt")
+        .lines()
+        .map(|l| {
+            if l.starts_with("depends_on:") {
+                format!("depends_on: {three_deps}")
+            } else if l.starts_with("parallel_group:") {
+                "parallel_group: —".to_string()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    std::fs::write(
+        r.root.join("specs/mini/units/U-003-three.md"),
+        three.join("\n") + "\n",
+    )
+    .unwrap();
+    for (n, file) in [
+        ("one", "U-001-one"),
+        ("two", "U-002-two"),
+        ("three", "U-003-three"),
+    ] {
+        let counter = r._tmp.path().join(format!("ran-{n}"));
+        edit(
+            r,
+            &format!("specs/mini/units/{file}.md"),
+            &format!("`test -f src/{n}.txt`"),
+            &format!(
+                "`sh -c 'echo ran >> {}; test -f src/{n}.txt'`",
+                counter.display()
+            ),
+        );
+    }
+    git(&r.root, &["add", "-A"]);
+    git(
+        &r.root,
+        &["commit", "-q", "-m", "U-003, and rows that count"],
+    );
+    stub_env(r, one)
+}
+
+/// A solution tree with all three files, `src/one.txt` holding `one`.
+fn stub_env(r: &Rig, one: &str) -> Vec<(String, String)> {
+    let n = std::fs::read_dir(r._tmp.path()).unwrap().count();
+    let solution = r._tmp.path().join(format!("solution-{n}"));
+    copy_dir(
+        &repo_root().join("fixtures/seeded/run-mini/solution"),
+        &solution,
+    );
+    std::fs::write(solution.join("src/one.txt"), one).unwrap();
+    std::fs::write(solution.join("src/three.txt"), "three\n").unwrap();
+    let map = r._tmp.path().join("stub-map-three.toml");
+    std::fs::write(
+        &map,
+        "[units]\nU-001 = [\"src/one.txt\"]\nU-002 = [\"src/two.txt\"]\nU-003 = [\"src/three.txt\"]\n",
+    )
+    .unwrap();
+    vec![
+        ("STUB_REF".to_string(), solution.display().to_string()),
+        ("STUB_MAP".to_string(), map.display().to_string()),
+    ]
+}
+
+/// How many times unit row `n` (`one`, `two`, `three`) has run.
+fn rows_ran(r: &Rig, n: &str) -> usize {
+    std::fs::read_to_string(r._tmp.path().join(format!("ran-{n}")))
+        .unwrap_or_default()
+        .lines()
+        .count()
+}
+
+fn env_of(env: &[(String, String)]) -> Vec<(&str, &str)> {
+    env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+}
+
+#[test]
+fn a_run_with_nothing_to_do_runs_no_row_and_no_worker() {
+    let r = rig();
+    let env = with_unit_three(&r, "[]", "one\n");
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &env_of(&env));
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    let before: Vec<usize> = ["one", "two", "three"]
+        .iter()
+        .map(|n| rows_ran(&r, n))
+        .collect();
+
+    let started = Instant::now();
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &env_of(&env));
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("Complete."), "{stdout}");
+    assert!(stdout.contains("§5 Test: exit 0 (true)"), "{stdout}");
+    assert!(!stdout.contains("dispatch "), "{stdout}");
+    assert!(r.run_json()["workers"].as_array().unwrap().is_empty());
+    let after: Vec<usize> = ["one", "two", "three"]
+        .iter()
+        .map(|n| rows_ran(&r, n))
+        .collect();
+    assert_eq!(before, after, "no row runs when nothing changed");
+    assert!(started.elapsed() < Duration::from_secs(30));
+}
+
+/// U-002 depends on U-001; U-003 does not. U-001's text changes, it is
+/// rebuilt — into `one`.
+fn rebuild_unit_one(one: &str) -> (Rig, [usize; 3], String, String) {
+    let r = rig();
+    edit(
+        &r,
+        "specs/mini/units/U-002-two.md",
+        "depends_on: []",
+        "depends_on: [U-001]",
+    );
+    edit(
+        &r,
+        "specs/mini/units/U-002-two.md",
+        "parallel_group: a",
+        "parallel_group: —",
+    );
+    let env = with_unit_three(&r, "[]", "one\n");
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &env_of(&env));
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+
+    let sdd = r.root.join("specs/mini/sdd.md");
+    let text = std::fs::read_to_string(&sdd).unwrap();
+    std::fs::write(&sdd, text.replace("version: 1.0.0", "version: 1.1.0")).unwrap();
+    amend_requirement(
+        &r,
+        "specs/mini/units/U-001-one.md",
+        "with the frozen content",
+        "with the frozen content, again",
+        "mini CH-001: U-001.R1 says again (1.1.0)",
+    );
+    let _ = r.run(&["audit", "--apply-stale"], &[]);
+    git(&r.root, &["add", "-A"]);
+    git(
+        &r.root,
+        &["commit", "-q", "-m", "mini CH-001: staleness applied"],
+    );
+    // (the audit ran every row: count from here)
+    let before = [
+        rows_ran(&r, "one"),
+        rows_ran(&r, "two"),
+        rows_ran(&r, "three"),
+    ];
+    let env = stub_env(&r, one);
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &env_of(&env));
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("dispatch U-001 (c2)"), "{stdout}");
+    assert!(!stdout.contains("dispatch U-002"), "{stdout}");
+    assert!(!stdout.contains("dispatch U-003"), "{stdout}");
+    assert!(stdout.contains("Complete."), "{stdout}");
+    let ran = [
+        rows_ran(&r, "one") - before[0],
+        rows_ran(&r, "two") - before[1],
+        rows_ran(&r, "three") - before[2],
+    ];
+    let journal = git(&r.root, &["show", "main:specs/mini/journal.ndjson"]);
+    (r, ran, format!("{stdout}\nstderr:\n{stderr}"), journal)
+}
+
+#[test]
+fn a_regenerated_unit_rechecks_exactly_its_dependents() {
+    let (_r, ran, stdout, journal) = rebuild_unit_one("one, again\n");
+    // U-001's gate: its own row, and U-002's — it depends on U-001, whose
+    // file changed; U-003 does not, and runs nothing
+    assert_eq!(ran, [1, 1, 0], "{stdout}\n{journal}");
+    assert!(
+        journal.contains(r#""event":"verified","unit":"U-002","actor":"recheck""#),
+        "{journal}"
+    );
+}
+
+#[test]
+fn a_unit_regenerated_into_the_same_bytes_rechecks_nothing() {
+    let (_r, ran, _, journal) = rebuild_unit_one("one\n");
+    // early cutoff: no file changed, so nothing downstream is dirty
+    assert_eq!(ran, [1, 0, 0]);
+    assert!(!journal.contains(r#""actor":"recheck""#), "{journal}");
+}
+
+#[test]
+fn rechecks_recorded_before_an_interrupt_are_kept() {
+    // U-001 and U-002 are built; U-003 waits on a question
+    let r = rig();
+    let env = with_unit_three(&r, "[]", "one\n");
+    let mut first = env_of(&env);
+    first.push(("STUB_BLOCK_UNIT", "U-003"));
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &first);
+    assert_eq!(code, 2, "stdout:\n{stdout}\nstderr:\n{stderr}");
+
+    // a change outside every SDD's scope: every Verified unit is dirty
+    std::fs::write(r.root.join("NOTES.txt"), "read by everything\n").unwrap();
+    git(&r.root, &["add", "-A"]);
+    git(&r.root, &["commit", "-q", "-m", "notes"]);
+    let before = [rows_ran(&r, "one"), rows_ran(&r, "two")];
+
+    // the next run re-checks them at its start and records it, then is
+    // interrupted while U-003 is being built
+    let mut second = env_of(&env);
+    second.push(("STUB_HANG_UNIT", "U-003"));
+    let mut bg = r.start(&["run", "--cap", "2"], &second);
+    wait_for("U-003's worker", || {
+        running_worker(&r.run_json(), "U-003").is_some() || !bg.running()
+    });
+    bg.signal("-INT");
+    let (status, stdout, stderr) = bg.finish();
+    assert_eq!(
+        status.signal(),
+        Some(2),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        [
+            rows_ran(&r, "one") - before[0],
+            rows_ran(&r, "two") - before[1]
+        ],
+        [1, 1]
+    );
+    let log = git(&r.root, &["log", "--format=%s", "main"]);
+    assert!(log.contains("sdd: re-check U-001, U-002"), "{log}");
+
+    // the run after it re-checks nothing that was recorded
+    let before = [rows_ran(&r, "one"), rows_ran(&r, "two")];
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &env_of(&env));
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("integrated U-003"), "{stdout}");
+    assert_eq!(
+        [
+            rows_ran(&r, "one") - before[0],
+            rows_ran(&r, "two") - before[1]
+        ],
+        [0, 0]
+    );
+}
+
+// ------------------------------------------------- lanes and their checkouts
+
+#[test]
+fn runs_of_two_sdds_gate_side_by_side() {
+    // Each SDD's U-001 has a Verification row that leaves a marker and
+    // waits for the other SDD's: it passes only when the two gates run at
+    // the same time. Each SDD has an integration checkout and a lock of its
+    // own, so neither run waits for the other's gate.
+    let r = rig_of("run-multi");
+    let meet = r._tmp.path().join("meet");
+    std::fs::create_dir_all(&meet).unwrap();
+    for (sdd, file, theirs) in [
+        ("alpha", "a/one.txt", "beta"),
+        ("beta", "b/one.txt", "alpha"),
+    ] {
+        let row = format!(
+            "touch {m}/{sdd} && i=0 && while [ ! -e {m}/{theirs} ] && [ $i -lt 300 ]; do i=$((i+1)); sleep 0.1; done && test -e {m}/{theirs} && test -f {file}",
+            m = meet.display()
+        );
+        edit(
+            &r,
+            &format!("specs/{sdd}/units/U-001-one.md"),
+            &format!("`test -f {file}`"),
+            &format!("`{row}`"),
+        );
+    }
+    git(&r.root, &["add", "-A"]);
+    git(&r.root, &["commit", "-q", "-m", "rows that meet"]);
+
+    let (alpha, beta) = (multi_env("alpha"), multi_env("beta"));
+    let a = r.start(&["run", "--sdd", "specs/alpha"], &borrowed(&alpha));
+    let b = r.start(&["run", "--sdd", "specs/beta"], &borrowed(&beta));
+    for (name, run) in [("alpha", a), ("beta", b)] {
+        let (status, stdout, stderr) = run.finish();
+        assert!(
+            status.success(),
+            "{name}: {status:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stdout.contains("Progress: 2/2 Verified"),
+            "{name}: {stdout}"
+        );
+        // at the first gate: a row that gave up waiting would have turned it
+        // red, and U-001 would have landed only on a later claim
+        assert!(stdout.contains("integrated U-001 (c1)"), "{name}: {stdout}");
+        assert!(!stderr.contains("gate red"), "{name}: {stderr}");
+    }
+    // each gated in its own checkout
+    let wt = r.worktrees();
+    assert!(wt.join("mainline-alpha/a/one.txt").exists());
+    assert!(wt.join("mainline-beta/b/one.txt").exists());
+    assert!(!wt.join("mainline").exists());
+}
+
+#[test]
+fn a_file_one_gate_leaves_behind_is_gone_at_the_next() {
+    // The Build command refuses to run where an earlier command left its
+    // output — a file the repository ignores. Preflight and every gate
+    // start from a checkout with no such file in it, so all of them pass.
+    let r = rig();
+    std::fs::write(r.root.join(".gitignore"), "/out/\n").unwrap();
+    edit(
+        &r,
+        "specs/mini/sdd.md",
+        "- Build:     `true`",
+        "- Build:     `test ! -e out/built && mkdir -p out && touch out/built`",
+    );
+    // U-002 after U-001: two gates, one after the other
+    edit(
+        &r,
+        "specs/mini/units/U-002-two.md",
+        "depends_on: []",
+        "depends_on: [U-001]",
+    );
+    edit(
+        &r,
+        "specs/mini/units/U-002-two.md",
+        "parallel_group: a",
+        "parallel_group: —",
+    );
+    git(&r.root, &["add", "-A"]);
+    git(
+        &r.root,
+        &["commit", "-q", "-m", "a build that leaves its output"],
+    );
+
+    let (code, stdout, stderr) = r.run(&["run"], &[]);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("integrated U-001 (c1)"), "{stdout}");
+    assert!(stdout.contains("integrated U-002 (c1)"), "{stdout}");
+    assert!(stdout.contains("Complete."), "{stdout}");
+    // and no §5 command ran in the primary checkout
+    assert!(!r.root.join("out").exists());
+}
+
+#[test]
+fn a_lock_file_a_killed_run_left_in_the_checkout_does_not_stop_the_next_run() {
+    // a first run gates U-002 and ends with U-001 blocked
+    let r = rig();
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &[("STUB_BLOCK_UNIT", "U-001")]);
+    assert_eq!(code, 2, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("integrated U-002 (c1)"), "{stdout}");
+
+    // a run killed while git was writing in the lane's checkout leaves
+    // git's index lock behind, and a git command there refuses to start
+    let checkout = r.worktrees().join("mainline-mini");
+    let git_dir = PathBuf::from(git(&checkout, &["rev-parse", "--absolute-git-dir"]));
+    std::fs::write(git_dir.join("index.lock"), "").unwrap();
+    std::fs::write(checkout.join("left-behind.txt"), "a crashed run's\n").unwrap();
+
+    // the next run makes the checkout anew, and builds
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &[]);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("integrated U-001 (c2)"), "{stdout}");
+    assert!(stdout.contains("Progress: 2/2 Verified"), "{stdout}");
+    assert!(!checkout.join("left-behind.txt").exists());
+    let git_dir = PathBuf::from(git(&checkout, &["rev-parse", "--absolute-git-dir"]));
+    assert!(!git_dir.join("index.lock").exists());
+}
+
+#[test]
+fn a_run_keeps_its_records_by_lane() {
+    let r = rig();
+    let (code, stdout, stderr) = r.run(&["run", "--cap", "2"], &[]);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    let job = r.run_json()["job_id"].as_str().unwrap().to_string();
+    let logs = r.root.join(".vitrify/logs").join(&job);
+    // the job's own records, and the lanes it built
+    let project: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(logs.join("project.json")).unwrap()).unwrap();
+    assert_eq!(project["job_id"], job.as_str());
+    let lanes = project["lanes"].as_array().unwrap();
+    assert_eq!(lanes.len(), 1, "{project}");
+    assert_eq!(lanes[0]["slug"], "mini");
+    assert_eq!(lanes[0]["root"], "specs/mini");
+    assert_eq!(lanes[0]["state"], "complete");
+    assert_eq!(lanes[0]["records"], format!(".vitrify/logs/{job}/mini/"));
+    for name in ["run.json", "events.jsonl", "report.txt"] {
+        assert!(logs.join(name).is_file(), "{name}");
+    }
+    // the lane's: its gate board and its workers' logs
+    let lane = logs.join("mini");
+    assert!(lane.join("gate.json").is_file());
+    assert!(lane.join(format!("worker-{job}-w1.prompt.md")).is_file());
+    assert!(lane.join(format!("worker-{job}-w1.out")).is_file());
+    for w in r.run_json()["workers"].as_array().unwrap() {
+        assert_eq!(w["lane"], "mini");
+    }
+    // the head checkout went with the run
+    let left: Vec<String> = std::fs::read_dir(r.root.join(".vitrify"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with("tx-"))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
 }
 
 /// `~/.vitrify/config.toml` as `vitrify init` writes it, its probe record

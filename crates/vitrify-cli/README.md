@@ -41,6 +41,8 @@ nohup vitrify run > run.out 2> run.err &   # outlives the terminal; ends Complet
 vitrify run status --follow                # each unit's stage, time and changes
 ```
 
+In a repository with several SDDs, a plain `vitrify run` builds every Active SDD as one project run, critical path first, and re-checks what a change in one SDD reaches in another.
+
 ## Documentation
 
 - [vitrify on GitHub](https://github.com/bitshock-src/vitrify#readme) — what vitrify does, and how it works.

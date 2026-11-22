@@ -11,11 +11,14 @@
 //! drift from it is a bug.
 
 pub mod audit;
+pub mod cascade;
 pub mod changelog;
 pub mod claims;
 pub mod config;
 pub mod content;
 pub mod contract;
+pub mod facf;
+pub mod graph;
 pub mod harness;
 pub mod journal;
 pub mod ledger;

@@ -97,11 +97,20 @@ fn held_rig() -> Rig {
 
 /// run-mini, changed by `edit` before the seed commit.
 fn rig_with(edit: impl FnOnce(&Path)) -> Rig {
+    rig_from("run-mini", edit)
+}
+
+/// The project of the seeded fixture `fixture`, changed by `edit` before the
+/// seed commit.
+fn rig_from(fixture: &str, edit: impl FnOnce(&Path)) -> Rig {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("repo");
     let home = tmp.path().join("vhome");
     std::fs::create_dir_all(&root).unwrap();
-    copy_dir(&repo_root().join("fixtures/seeded/run-mini/project"), &root);
+    copy_dir(
+        &repo_root().join(format!("fixtures/seeded/{fixture}/project")),
+        &root,
+    );
     let root = root.canonicalize().unwrap();
     edit(&root);
     git(&root, &["init", "-q", "-b", "main"]);
@@ -1027,4 +1036,283 @@ fn write_config(home: &Path, worker: &Path) {
         ),
     )
     .unwrap();
+}
+
+// ------------------------------------------------------------------- lanes
+
+const JOB: &str = "run-20261121T101500Z-p4242";
+
+/// project-pipeline (core, then api, three units each) with core U-001
+/// Verified.
+fn pipeline_rig() -> Rig {
+    rig_from("project-pipeline", |root| {
+        let unit = root.join("specs/core/units/U-001-pkg.md");
+        let text = std::fs::read_to_string(&unit).unwrap();
+        assert!(text.contains("status: Ready"), "{text}");
+        std::fs::write(&unit, text.replace("status: Ready", "status: Verified")).unwrap();
+    })
+}
+
+impl Rig {
+    fn logs(&self) -> PathBuf {
+        self.root.join(".vitrify/logs").join(JOB)
+    }
+
+    /// Write a record by hand into the job's directory, the way a run does:
+    /// never seen half-written.
+    fn record(&self, name: &str, body: &Value) {
+        let dir = self.logs();
+        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = dir.join(format!("{name}.tmp"));
+        std::fs::write(&tmp, serde_json::to_string_pretty(body).unwrap()).unwrap();
+        std::fs::rename(&tmp, dir.join(name)).unwrap();
+    }
+
+    /// `run.json`, written for this test process, which stays alive while
+    /// its job lock stands. `sdd` is what the run builds; `terminated` how
+    /// it ended, when it did; `workers` the attempts it recorded.
+    fn run_record(&self, sdd: &str, terminated: Option<&str>, workers: Value) {
+        let mut body = serde_json::json!({
+            "job_id": JOB,
+            "pid": std::process::id(),
+            "sdd": sdd,
+            "harness": "claude",
+            "started_at": "2026-11-21T10:15:00Z",
+            "params": {"cap": 4, "gate_jobs": 4, "lease_minutes": 60, "worker_timeout_minutes": 45},
+            "workers": workers,
+            "report": null,
+        });
+        if let Some(state) = terminated {
+            body["terminated"] = serde_json::json!({
+                "state": state, "at": "2026-11-21T10:30:00Z", "detail": "done"
+            });
+        }
+        self.record("run.json", &body);
+        let scratch = self.root.join(".vitrify");
+        std::fs::create_dir_all(scratch.join("jobs")).unwrap();
+        std::fs::write(scratch.join("jobs").join(format!("{JOB}.lock")), "").unwrap();
+        std::fs::write(
+            scratch.join("run.json"),
+            format!("{{\"job_id\": \"{JOB}\"}}"),
+        )
+        .unwrap();
+    }
+}
+
+/// core's U-002 waiting for the gate: one attempt in flight, in lane core.
+fn core_attempt() -> Value {
+    serde_json::json!([{
+        "holder": "run-x-w1", "pid": 1, "unit": "U-002", "claim_seq": 1,
+        "worktree": "/nowhere", "started_at": "2026-11-21T10:16:00Z",
+        "ended_at": null, "outcome": "integrating", "retry": false,
+        "detail": null, "lane": "core"
+    }])
+}
+
+/// The lane lines of the human view as tokens, after the table's header.
+fn lane_lines(stdout: &str) -> Vec<Vec<&str>> {
+    let mut lines = stdout.lines().skip_while(|l| !l.starts_with("LANE"));
+    lines.next().expect("the lane table has a header");
+    lines
+        .take_while(|l| !l.is_empty())
+        .map(|l| l.split_whitespace().collect())
+        .collect()
+}
+
+fn lane<'a>(snap: &'a Value, slug: &str) -> &'a Value {
+    snap["lanes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["slug"] == slug)
+        .unwrap_or_else(|| panic!("no lane {slug}: {snap}"))
+}
+
+#[test]
+fn every_lane_of_a_job_is_shown_from_the_minimal_project_record() {
+    let r = pipeline_rig();
+    r.run_record("specs/core, specs/api", None, core_attempt());
+    r.record(
+        "project.json",
+        &serde_json::json!({"job_id": JOB, "lanes": [
+            {"sdd": "specs/core", "slug": "core", "state": "build"},
+            {"sdd": "specs/api", "slug": "api", "state": "idle"},
+        ]}),
+    );
+
+    let (code, stdout, stderr) = r.status(&[]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.starts_with(JOB), "{stdout}");
+    // the table takes the place of the one-SDD progress line
+    assert!(!stdout.contains("Progress:"), "{stdout}");
+    let lanes = lane_lines(&stdout);
+    assert_eq!(lanes.len(), 2, "{stdout}");
+    assert_eq!(
+        lanes[0].join(" "),
+        "core build 1/3 Verified · 1 in flight · 1 waiting",
+        "{stdout}"
+    );
+    assert_eq!(
+        lanes[1].join(" "),
+        "api idle 0/3 Verified · 3 waiting core U-002",
+        "{stdout}"
+    );
+    assert!(stdout.contains("Logs: .vitrify/logs/"), "{stdout}");
+
+    let snap = r.status_json(&[]);
+    // the keys of today's object keep their places; `lanes` follows them,
+    // and each lane's keys come in a fixed order
+    let (_, raw, _) = r.status(&["--json"]);
+    let at = |key: &str| raw.find(&format!("\n  \"{key}\":")).unwrap();
+    assert!(at("logs") < at("lanes"), "{raw}");
+    let lanes_json = &raw[at("lanes")..];
+    let first = &lanes_json[..lanes_json.find("}").unwrap()];
+    let mut last = 0;
+    for key in [
+        "slug",
+        "root",
+        "state",
+        "verified",
+        "total",
+        "in_flight",
+        "waiting",
+        "waits_on",
+    ] {
+        let next = first.find(&format!("\"{key}\"")).unwrap();
+        assert!(next >= last, "{key}: {first}");
+        last = next;
+    }
+    assert_eq!(snap["job_id"], JOB);
+    assert_eq!(snap["sdd"], "specs/core, specs/api");
+    let core = lane(&snap, "core");
+    assert_eq!(core["root"], "specs/core");
+    assert_eq!(core["state"], "build");
+    assert_eq!(core["verified"], 1);
+    assert_eq!(core["total"], 3);
+    assert_eq!(core["in_flight"], 1);
+    assert_eq!(core["waiting"], 1);
+    assert_eq!(core["waits_on"], serde_json::json!([]));
+    let api = lane(&snap, "api");
+    assert_eq!(api["state"], "idle");
+    assert_eq!(api["in_flight"], 0);
+    assert_eq!(api["waiting"], 3);
+    // api U-001 only needs core U-001, which is Verified
+    assert_eq!(api["waits_on"], serde_json::json!(["core U-002"]));
+}
+
+#[test]
+fn the_project_record_s_lanes_are_shown_with_its_counts_as_a_fallback() {
+    let r = pipeline_rig();
+    r.run_record("specs/core, specs/api, specs/docs", None, core_attempt());
+    let mut lanes = Vec::new();
+    for (slug, state, units, verified) in [
+        ("api", "idle", 3, 0),
+        ("core", "build", 3, 1),
+        // its SDD is not in the checkout: the plan's counts stand in
+        ("docs", "up to date", 4, 4),
+    ] {
+        lanes.push(serde_json::json!({
+            "slug": slug, "root": format!("specs/{slug}"), "state": state,
+            "units": units, "verified": verified,
+            "regenerate": 0, "adopt": 0, "recheck": 0
+        }));
+    }
+    r.record(
+        "project.json",
+        &serde_json::json!({
+            "job_id": JOB, "started_at": "2026-11-21T10:15:00Z", "ended_at": null,
+            "capacity": {"workers": 4, "gate_jobs": 4, "lanes": 0},
+            "lanes": lanes,
+            "regenerate": [], "adopt": [], "recheck": [],
+            "critical_path": [{"sdd": "core", "unit": "U-002"}],
+            "critical_path_ran": [],
+        }),
+    );
+
+    let snap = r.status_json(&[]);
+    let slugs: Vec<&str> = snap["lanes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["slug"].as_str().unwrap())
+        .collect();
+    // the project record's order
+    assert_eq!(slugs, ["api", "core", "docs"]);
+    assert_eq!(
+        lane(&snap, "api")["waits_on"],
+        serde_json::json!(["core U-002"])
+    );
+    assert_eq!(lane(&snap, "core")["in_flight"], 1);
+    let docs = lane(&snap, "docs");
+    assert_eq!(docs["state"], "up to date");
+    assert_eq!(docs["root"], "specs/docs");
+    assert_eq!(docs["verified"], 4);
+    assert_eq!(docs["total"], 4);
+    assert_eq!(docs["waiting"], 0);
+    let (_, stdout, _) = r.status(&[]);
+    let lines = lane_lines(&stdout);
+    assert_eq!(lines.len(), 3, "{stdout}");
+    assert_eq!(lines[2][..4], ["docs", "up", "to", "date"], "{stdout}");
+}
+
+#[test]
+fn a_job_recorded_before_lanes_existed_is_one_lane() {
+    let r = pipeline_rig();
+    // records directly under the job's directory, and no project.json
+    r.run_record("specs/core", Some("blocked"), serde_json::json!([]));
+    let (code, stdout, stderr) = r.status(&[]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let printed: Vec<&str> = stdout.lines().collect();
+    assert!(printed[0].contains("ended: blocked"), "{stdout}");
+    assert_eq!(printed[1], "Progress: 1/3 Verified · 2 Ready", "{stdout}");
+    assert!(!stdout.contains("LANE"), "{stdout}");
+
+    let snap = r.status_json(&[]);
+    assert_eq!(snap["lanes"].as_array().unwrap().len(), 1);
+    let only = lane(&snap, "core");
+    assert_eq!(only["root"], "specs/core");
+    assert_eq!(only["state"], "blocked");
+    assert_eq!(only["verified"], 1);
+    assert_eq!(only["total"], 3);
+    assert_eq!(only["waits_on"], serde_json::json!([]));
+}
+
+#[test]
+fn follow_shows_a_lane_changing_state() {
+    let r = pipeline_rig();
+    r.run_record("specs/core, specs/api", None, core_attempt());
+    let project = |api: &str| {
+        serde_json::json!({"job_id": JOB, "lanes": [
+            {"sdd": "specs/core", "slug": "core", "state": "build"},
+            {"sdd": "specs/api", "slug": "api", "state": api},
+        ]})
+    };
+    r.record("project.json", &project("idle"));
+    let follower = r.start(&["run", "status", "--follow", "--interval", "1"], &[]);
+    wait_for("the follower to attach", || {
+        follower.stdout().contains("--- following")
+    });
+    r.record("project.json", &project("build"));
+    wait_for("the follower to show the lane change", || {
+        after_prefix(&follower.stdout(), "--- following")
+            .iter()
+            .any(|l| l.contains("[api]") && l.contains("idle → build"))
+    });
+    // the run ends: the follower says so last and exits
+    r.run_record(
+        "specs/core, specs/api",
+        Some("complete"),
+        serde_json::json!([]),
+    );
+    let (status, stdout, stderr) = follower.finish();
+    assert_eq!(status.code(), Some(0), "{stdout}{stderr}");
+    let lines = after_prefix(&stdout, "--- following");
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert!(
+        lines[0].contains("[api]") && lines[0].contains("idle → build"),
+        "{stdout}"
+    );
+    assert!(lines[1].contains("ended: complete"), "{stdout}");
+    // the first look is the whole view, lane table included
+    assert!(stdout.contains("LANE"), "{stdout}");
 }

@@ -9,6 +9,7 @@ pub mod gate;
 pub mod git;
 pub mod help;
 pub mod home;
+pub mod incremental;
 pub mod layout;
 pub mod out;
 pub mod run;
@@ -49,7 +50,12 @@ fn dispatch(cli: Cli) -> Result<u8, CoreError> {
         cmd::load_config(&vitrify_core::config::Overrides::default())?;
     }
     match cli.cmd {
-        Cmd::Locate { units, sdd, json } => cmd::locate::run(units, sdd.as_deref(), json),
+        Cmd::Locate {
+            units,
+            graph,
+            sdd,
+            json,
+        } => cmd::locate::run(units, graph, sdd.as_deref(), json),
         Cmd::Readset {
             unit,
             sdd,
@@ -201,6 +207,8 @@ fn dispatch(cli: Cli) -> Result<u8, CoreError> {
             cap,
             gate_jobs,
             wait,
+            recheck,
+            upstream,
             sdd,
             mainline,
             sub: None,
@@ -211,6 +219,8 @@ fn dispatch(cli: Cli) -> Result<u8, CoreError> {
             mainline,
             gate_jobs,
             wait,
+            recheck,
+            upstream,
         }),
     }
 }

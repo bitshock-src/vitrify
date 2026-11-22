@@ -63,9 +63,24 @@ A worker whose unit consumes a pin reads the pin's own entry and then the author
 | `invalid` | a pin that still carries a body; a contract whose `Producer:` names another SDD's contract but has no `Pin:` line; an authority with no `Surface` heading; a slug two SDDs share | as the cause says — for a missing `Pin:` line, write it and let `vitrify pin sync` fix the hash |
 | `unchecked` | a transcription; there is no authority to compare | — |
 
+### Pins Carry Order Too
+
+A pin is the one handle between SDDs, and it does two jobs. Listed in a unit's `consumes`, it puts the authority's body in the unit's reading set, so a change reaches the unit as staleness; that orders nothing. Listed in the unit's `depends_on` as well (schema 2.1), it also makes the unit wait until the units that produce the authority are built, and makes the unit re-checked when their code changes. Pick the pin's role by what the unit needs:
+
+| The unit needs | Where the pin goes | Effect |
+| --- | --- | --- |
+| the **code** behind the surface: it imports or links it, installs its package, or runs its CLI in its checks | `consumes` and `depends_on` | the unit waits for the producers, and its gates run again when their code changes |
+| only the **interface** or **data format**: it codes against the shape, or parses the data | `consumes` only | nothing is ordered; the unit builds while the producers build |
+
+Pins routinely run both ways between SDDs that read each other's data, which is why consuming alone orders nothing. A cycle through `depends_on` is refused; see [Work Units](units.md#one-graph-across-sdds).
+
+### Package Boundaries Are Contracts
+
+An SDD whose code other SDDs install or import publishes a contract for its package surface, and its foundation unit produces it. A consuming SDD's foundation unit lists that pin in `depends_on`. Because every unit depends on its SDD's foundation, a change to the foundation's files — a lockfile, build configuration, scaffolding — re-checks every unit of that SDD and every dependent in other SDDs.
+
 ### What a Pin Saves
 
-A pin saves the copied text and the diff that would repeat in every consumer on every producer edit. It saves no reading: the authority's body counts against the consumer's reading-set budget. And it removes no change entry: a producer's change still reaches each consumer as that consumer's own entry.
+A pin saves the copied text and the diff that would repeat in every consumer on every producer edit. It saves no reading: the authority's body counts against the consumer's reading-set budget. And it removes no change entry: a producer's change still reaches each consumer as that consumer's own entry. Adding a pin to `depends_on` to record a need the unit's built code already has is an editorial (PATCH) change.
 
 ### Checked by Lint, So by Preflight
 

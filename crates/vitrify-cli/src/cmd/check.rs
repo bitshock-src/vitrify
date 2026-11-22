@@ -1,16 +1,23 @@
 //! `vitrify check` — every read-only consistency check vitrify has, over one
 //! SDD or all of them: lint, the audit, the journal replay, the ledger check
 //! and the pin states, each finding with its source and its remediation;
-//! open questions as notes. Writes nothing.
+//! open questions as notes. Then the dirty units: Verified units a committed
+//! change reached since their last recorded check, each with the changed
+//! paths that made it so — listed, never re-checked; that is a run's job.
+//! Writes nothing.
 
 use std::path::Path;
 
 use vitrify_core::CoreError;
+use vitrify_core::cascade::{Anchors, Dirty, Why};
 use vitrify_core::config::Overrides;
+use vitrify_core::graph::{self, render_path};
 use vitrify_core::journal as core_journal;
 use vitrify_core::model::{Instance, SddHandle, is_empty_marker};
 
-use crate::out::{J, emit};
+use crate::git::Git;
+use crate::incremental::dirty::{self, Cascade, DirtySet, Mode, Snapshot};
+use crate::out::{J, diag, emit};
 
 pub struct Flags {
     pub sdd: Option<String>,
@@ -38,7 +45,43 @@ struct Report {
     root: String,
     findings: Vec<Item>,
     notes: Vec<String>,
+    /// Its dirty units, sorted by unit id.
+    dirty: Vec<Dirty>,
+    /// Its recorded checks.
+    anchors: Anchors,
     code: u8,
+}
+
+/// `changed`, `no-anchor`, `unresolved-anchor` or `everything`: why a unit
+/// is dirty, as `--json` names it.
+fn why_code(why: &Why) -> &'static str {
+    match why {
+        Why::Paths(_) => "changed",
+        Why::NoAnchor => "no-anchor",
+        Why::NoDiff(_) => "unresolved-anchor",
+        Why::Everything => "everything",
+    }
+}
+
+fn dirty_json(d: &Dirty, anchor: Option<String>) -> J {
+    let paths = match &d.why {
+        Why::Paths(reasons) => reasons
+            .iter()
+            .map(|r| {
+                J::Obj(vec![
+                    ("path".into(), J::s(r.path.clone())),
+                    ("owner".into(), J::s(r.owner.describe())),
+                ])
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    J::Obj(vec![
+        ("unit".into(), J::s(d.node.unit.clone())),
+        ("anchor".into(), J::opt_str(anchor)),
+        ("why".into(), J::s(why_code(&d.why))),
+        ("paths".into(), J::Arr(paths)),
+    ])
 }
 
 impl Report {
@@ -87,7 +130,25 @@ impl Report {
                 "notes".into(),
                 J::Arr(self.notes.iter().map(|n| J::s(n.clone())).collect()),
             ),
+            (
+                "dirty".into(),
+                J::Arr(
+                    self.dirty
+                        .iter()
+                        .map(|d| dirty_json(d, self.anchor_of(d)))
+                        .collect(),
+                ),
+            ),
         ])
+    }
+
+    /// The anchor a dirty unit's reason names, when it has one.
+    fn anchor_of(&self, d: &Dirty) -> Option<String> {
+        match &d.why {
+            Why::NoDiff(anchor) => Some(anchor.clone()),
+            Why::NoAnchor | Why::Everything => None,
+            Why::Paths(_) => self.anchors.unit(&d.node.unit).map(str::to_string),
+        }
     }
 
     fn emit_text(&self) {
@@ -103,6 +164,14 @@ impl Report {
         }
         for n in &self.notes {
             emit(&format!("{}: note: {n}", self.sdd));
+        }
+        for d in &self.dirty {
+            emit(&format!(
+                "{}: dirty {}: {}",
+                self.sdd,
+                d.node.unit,
+                dirty::describe(&d.why)
+            ));
         }
     }
 }
@@ -123,17 +192,23 @@ fn check_one(
     sdd: &SddHandle,
     budget: i64,
     skip_rotten: bool,
+    dirty: Option<&DirtySet>,
 ) -> Result<Report, CoreError> {
     let inst = Instance::load(sdd.clone())?;
     let at = super::shown(root, &inst.root);
+    let (events, _) = core_journal::read(&inst.handle())?;
+    let slug = graph::slug_of(&inst);
     let mut report = Report {
         sdd: super::label(sdd, root),
         root: at.clone(),
         findings: Vec::new(),
         notes: Vec::new(),
+        dirty: dirty
+            .map(|set| set.of_sdd(slug).cloned().collect())
+            .unwrap_or_default(),
+        anchors: Anchors::from_events(&events),
         code: 0,
     };
-    let (events, _) = core_journal::read(&inst.handle())?;
     let has_journal = !events.is_empty();
     let replayed = super::journal::replayed(&inst)?;
 
@@ -193,6 +268,37 @@ fn check_one(
     Ok(report)
 }
 
+/// The repository's dirty units at `HEAD`, from the checkout at `root`.
+/// `None` outside a git repository, before its first commit, and — with a
+/// note on stderr — when the SDDs cannot all be read or the unit graph has
+/// a cycle: there is nothing to cascade along then.
+fn dirty_units(root: &Path) -> Option<DirtySet> {
+    let git = Git::new(root);
+    let head = git.resolve_commit("HEAD").ok().flatten()?;
+    let not_computed = |why: &str| diag(&format!("note: dirty units not computed: {why}"));
+    let snapshot = match Snapshot::load(&git, root, &head) {
+        Ok(s) => s,
+        Err(e) => {
+            let text = e.to_string();
+            not_computed(text.strip_prefix("error: ").unwrap_or(&text));
+            return None;
+        }
+    };
+    match snapshot.dirty(&git, Mode::Changes) {
+        Ok(Cascade::Resolved(set)) => Some(set),
+        Ok(Cascade::Cycles(cycles)) => {
+            let paths: Vec<String> = cycles.cycles.iter().map(|c| render_path(c)).collect();
+            not_computed(&format!("the unit graph has a cycle: {}", paths.join("; ")));
+            None
+        }
+        Err(e) => {
+            let text = e.to_string();
+            not_computed(text.strip_prefix("error: ").unwrap_or(&text));
+            None
+        }
+    }
+}
+
 fn plural(n: usize, one: &str) -> String {
     if n == 1 {
         format!("1 {one}")
@@ -208,10 +314,11 @@ pub fn run(flags: Flags) -> Result<u8, CoreError> {
         .lint
         .readset_budget_bytes;
 
+    let dirty = dirty_units(&root);
     let mut reports: Vec<Report> = Vec::new();
     let code = if flags.all {
         super::each(&root, &sdds, |sdd| {
-            let report = check_one(&root, sdd, budget, flags.skip_rotten)?;
+            let report = check_one(&root, sdd, budget, flags.skip_rotten, dirty.as_ref())?;
             let code = report.code;
             if !flags.json {
                 report.emit_text();
@@ -220,7 +327,7 @@ pub fn run(flags: Flags) -> Result<u8, CoreError> {
             Ok(code)
         })
     } else {
-        let report = check_one(&root, &sdds[0], budget, flags.skip_rotten)?;
+        let report = check_one(&root, &sdds[0], budget, flags.skip_rotten, dirty.as_ref())?;
         if !flags.json {
             report.emit_text();
         }
@@ -242,8 +349,9 @@ pub fn run(flags: Flags) -> Result<u8, CoreError> {
     let findings: usize = reports.iter().map(|r| r.findings.len()).sum();
     let unclean = reports.iter().filter(|r| !r.findings.is_empty()).count();
     let unchecked = sdds.len() - reports.len();
-    if findings == 0 && unchecked == 0 {
-        emit(&format!("check clean: {}", plural(sdds.len(), "SDD")));
+    let dirty: usize = reports.iter().map(|r| r.dirty.len()).sum();
+    let mut line = if findings == 0 && unchecked == 0 {
+        format!("check clean: {}", plural(sdds.len(), "SDD"))
     } else {
         let mut line = format!(
             "check: {} in {unclean} of {}",
@@ -253,7 +361,11 @@ pub fn run(flags: Flags) -> Result<u8, CoreError> {
         if unchecked > 0 {
             line.push_str(&format!("; {unchecked} not checked"));
         }
-        emit(&line);
+        line
+    };
+    if dirty > 0 {
+        line.push_str(&format!("; {} dirty", plural(dirty, "unit")));
     }
+    emit(&line);
     Ok(code)
 }

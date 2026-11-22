@@ -25,15 +25,25 @@ Options:
 Runs every read-only check over one SDD, or with --all the repository: lint (--built once
 any unit has build state or a journal exists), audit (check 4 unless --skip-rotten), journal
 replay (where a journal exists), ledger regen --check (where a ledger or journal exists) and
-the pin states. Runs no §5 command; vitrify run --dry-run does.
-Reads:   each SDD, its journal and ledger, the SDDs it pins, its changelog and TDD
+the pin states. In a git repository it also lists the dirty units: Verified units whose
+checked-against paths a commit changed since their last recorded check (their files, those
+of every unit they depend on, unmanaged and outside-scope paths), or whose anchor git cannot
+resolve. Dirty units are not findings and nothing re-checks them here; vitrify run does.
+Runs no §5 command; vitrify run --dry-run does.
+Reads:   each SDD, its journal and ledger, the SDDs it pins, its changelog and TDD; for the
+         dirty units every SDD of the repository and git history up to HEAD
 Writes:  nothing
 Prints:  one `<slug>: [<source> <check>] subject: cause → remediation` line per finding,
-         then `<slug>: note: Q-### is open (blocks …)` notes, then
-         `check clean: N SDDs`, or `check: N findings in M of K SDDs`
+         then `<slug>: note: Q-### is open (blocks …)` notes, then one
+         `<slug>: dirty U-###: <path> (<owner>), …` line per dirty unit, then
+         `check clean: N SDDs`, or `check: N findings in M of K SDDs`, ending
+         `; N units dirty` when there are any
+         stderr: `note: dirty units not computed: …` when an SDD cannot be read or the
+           unit graph has a cycle
          --json: {sdd, root, clean, findings: [{source, check, subject, cause, remediation}],
-           notes}; an array with --all. source: lint, audit, journal, ledger or pin;
-           check: "L4", "5" or null
+           notes, dirty: [{unit, anchor, why, paths: [{path, owner}]}]}; an array with --all.
+           source: lint, audit, journal, ledger or pin; check: "L4", "5" or null;
+           why: changed, no-anchor or unresolved-anchor
 Exit status: the worst component (an error, 1, wins; else the highest): 0 clean · 2 a lint,
          audit or pin finding, or a usage error · 3 a journal or ledger mismatch · 4 no SDD,
          several and no --sdd, a schema version this vitrify does not read

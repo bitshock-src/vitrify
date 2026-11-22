@@ -39,6 +39,9 @@ pub struct TxPlan {
 /// the exit-code table's: claim on unclaimable → 4 first attempt / 5 after a lost
 /// race; renew not-Claimed-by-holder → 4, lease expired → 6; release
 /// not-Claimed-by-holder → 4.
+///
+/// Every `depends_on` entry must name a unit of the SDD; an entry that
+/// names none (a pin) holds the claim back. [`plan_with`] resolves pins.
 pub fn plan(
     inst_at_base: &Instance,
     op: Op,
@@ -48,13 +51,41 @@ pub fn plan(
     now: UtcTime,
     lost_race_before: bool,
 ) -> Result<TxPlan, CoreError> {
+    plan_with(
+        inst_at_base,
+        op,
+        unit_id,
+        holder,
+        lease_minutes,
+        now,
+        lost_race_before,
+        &|_| None,
+    )
+}
+
+/// [`plan`] with the claimable predicate extended across SDDs: `resolve`
+/// answers for the `depends_on` entries that name no unit of the SDD
+/// ([`model::unit_view_with`]), so a pin's entry is met once every unit
+/// producing its authority is Built or Verified. A refusal names each unmet
+/// unit behind such an entry.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_with(
+    inst_at_base: &Instance,
+    op: Op,
+    unit_id: &str,
+    holder: &str,
+    lease_minutes: i64,
+    now: UtcTime,
+    lost_race_before: bool,
+    resolve: model::Resolve,
+) -> Result<TxPlan, CoreError> {
     let Some(unit) = inst_at_base.unit(unit_id) else {
         return Err(CoreError::refusal(
             4,
             format!("error: unit not found at mainline head: {unit_id}"),
         ));
     };
-    let view = model::unit_view(unit, &inst_at_base.units, now);
+    let view = model::unit_view_with(unit, &inst_at_base.units, now, resolve);
 
     let (edits, event_name, new_seq, expires): (Vec<(String, String)>, &str, i64, Option<String>) =
         match op {
@@ -63,8 +94,20 @@ pub fn plan(
                     let blockers: Vec<String> = view
                         .depends_on
                         .iter()
-                        .filter(|(_, s)| s != "Built" && s != "Verified")
-                        .map(|(d, s)| format!("{d}={s}"))
+                        .filter(|(_, s)| !model::is_done(s))
+                        .map(|(d, s)| match view.through.iter().find(|t| &t.entry == d) {
+                            // a pin: the units behind it that are not done
+                            Some(t) => {
+                                let unmet: Vec<String> = t
+                                    .units
+                                    .iter()
+                                    .filter(|(_, s)| !model::is_done(s))
+                                    .map(|(n, s)| format!("{n}={s}"))
+                                    .collect();
+                                format!("{d} ({})", unmet.join(", "))
+                            }
+                            None => format!("{d}={s}"),
+                        })
                         .collect();
                     let why = if view.lease_live {
                         format!(

@@ -75,7 +75,7 @@ Commands by task:
   new               materialize a TDD or SDD template into the current directory
 
  Author and check
-  lint              authoring checks L1–L11, each finding with its remediation
+  lint              authoring checks L1–L12, each finding with its remediation
   check             every read-only check over one SDD or all: is it consistent
   readset           a unit's ordered minimal reading set, with its byte budget
   pin list          the external contracts (pins, transcriptions) and their states
@@ -84,7 +84,7 @@ Commands by task:
  Build and watch
   run               the orchestrator: build every unit through the gate
   run status        what a run is doing, unit by unit; its report once it ends
-  locate            find SDDs; list units and whether each can be claimed
+  locate            find SDDs; list units and whether each can be claimed; the SDD graph
   ledger progress   the one-line progress summary
 
  Change

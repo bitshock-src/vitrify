@@ -1,10 +1,11 @@
-//! `vitrify lint` — the mechanical authoring checks L1–L11.
+//! `vitrify lint` — the mechanical authoring checks L1–L12.
 //! Named findings `{check, subject, cause, remediation}`; exit 0 clean / 2 on
 //! any finding. The remediation is the edit or the command that resolves it.
 //!
-//! L1–L8 hold one SDD to itself. L9–L11 hold it to what lies outside it and
+//! L1–L8 hold one SDD to itself. L9–L12 hold it to what lies outside it and
 //! that it names: the contracts of other SDDs it pins (L9), its
-//! own changelog (L10), and the TDD it is derived from (L11).
+//! own changelog (L10), the TDD it is derived from (L11), and the units of
+//! other SDDs it waits on through pins (L12).
 
 use std::path::Path;
 
@@ -12,13 +13,14 @@ use vitrify_core::CoreError;
 use vitrify_core::audit;
 use vitrify_core::config::Overrides;
 use vitrify_core::contract::State;
+use vitrify_core::graph::{self, Entry, Node, UnitGraph, render_path};
 use vitrify_core::model::{self, Instance, SddHandle, Shape, is_empty_marker};
 use vitrify_core::{changelog, contract, journal, questions, readset, tdd};
 
 use crate::out::{J, emit};
 
 /// The checks, as the clean line names them.
-pub const CHECKS: &str = "L1–L11";
+pub const CHECKS: &str = "L1–L12";
 
 pub struct Finding {
     pub check: &'static str,
@@ -154,15 +156,16 @@ pub fn check_all(inst: &Instance, root: &Path, budget: i64) -> Result<Vec<Findin
     let at = super::shown(root, &inst.root);
     let handle = inst.handle();
 
-    // L1 — DAG acyclic; every referenced unit exists
-    for u in units {
-        for d in u.meta.get_list("depends_on") {
-            if !unit_ids.contains(&d.as_str()) {
+    // L1 — DAG acyclic; every depends_on entry is a unit of this SDD or —
+    // from schema 2.1 — a pin of it the unit also consumes
+    for ue in graph::classify(inst)? {
+        for (d, entry) in &ue.entries {
+            if let Entry::Invalid(p) = entry {
                 findings.push(f(
                     "L1",
-                    u.unit.clone(),
-                    format!("depends_on references nonexistent unit {d}"),
-                    format!("remove {d} from {}'s depends_on, or add unit {d}", u.unit),
+                    ue.unit.clone(),
+                    p.cause(&ue.unit, d),
+                    p.remediation(&ue.unit, d),
                 ));
             }
         }
@@ -504,7 +507,101 @@ pub fn check_all(inst: &Instance, root: &Path, budget: i64) -> Result<Vec<Findin
         findings.push(f("L11", subject, cause, remediation));
     }
 
+    // L12 — across SDDs: every pin in depends_on leads to the units that
+    // produce its authority, and no cycle runs through pins. Every SDD on
+    // such a cycle, or behind one, has a pin in depends_on of its own.
+    if graph::classify(inst)?
+        .iter()
+        .any(|ue| ue.entries.iter().any(|(_, e)| matches!(e, Entry::Pin(_))))
+    {
+        let unit_graph = super::repo_graph(root, Some(inst))?;
+        findings.extend(graph_findings(inst, &unit_graph));
+    }
+
     Ok(findings)
+}
+
+/// L12's findings for `inst` in the repository's unit graph: its pins in
+/// `depends_on` whose authority names no units of its SDD; every cycle
+/// through pins that runs through one of its units, as the path that closes
+/// it; and its units that only wait behind such a cycle. A cycle through
+/// pins crosses SDDs, or takes an edge that only a pin makes — a pin of the
+/// SDD's own contract, too. A cycle of the SDD's units alone is L1's.
+pub fn graph_findings(inst: &Instance, unit_graph: &UnitGraph) -> Vec<Finding> {
+    let slug = graph::slug_of(inst);
+    let mut findings: Vec<Finding> = unit_graph
+        .problems()
+        .iter()
+        .filter(|p| p.slug == slug && p.check() == "L12")
+        .map(|p| f("L12", p.unit.clone(), p.cause(), p.remediation()))
+        .collect();
+    let Err(cycles) = unit_graph.resolve() else {
+        return findings;
+    };
+    let crosses = |path: &[Node]| path.iter().any(|n| n.slug != path[0].slug);
+    let through_pins: Vec<&Vec<Node>> = cycles
+        .cycles
+        .iter()
+        .filter(|path| crosses(path) || path.windows(2).any(|w| pin_only(unit_graph, &w[0], &w[1])))
+        .collect();
+    for path in &through_pins {
+        if path.iter().any(|n| n.slug == slug) {
+            let cause = if crosses(path) {
+                "depends_on graph across SDDs contains a cycle through pins"
+            } else {
+                "depends_on graph contains a cycle through a pin of this SDD's own contract"
+            };
+            findings.push(f(
+                "L12",
+                render_path(path),
+                cause,
+                "remove one of the cycle's depends_on edges — a pin a unit only reads stays in consumes alone",
+            ));
+        }
+    }
+    for n in cycles.waiting.iter().filter(|n| n.slug == slug) {
+        if let Some(path) = through_pins
+            .iter()
+            .find(|path| waits_on(unit_graph, n, path))
+        {
+            findings.push(f(
+                "L12",
+                n.unit.clone(),
+                format!("waits behind the cycle {}", render_path(path)),
+                "break the cycle its own L12 finding names",
+            ));
+        }
+    }
+    findings
+}
+
+/// Whether `from` depends on `to` only through a pin: no `depends_on` entry
+/// names `to` directly.
+fn pin_only(unit_graph: &UnitGraph, from: &Node, to: &Node) -> bool {
+    let edges: Vec<_> = unit_graph
+        .edges()
+        .iter()
+        .filter(|e| &e.from == from && &e.to == to)
+        .collect();
+    !edges.is_empty() && edges.iter().all(|e| e.via.is_some())
+}
+
+/// Whether `n` depends, transitively, on a unit of `path`.
+fn waits_on(unit_graph: &UnitGraph, n: &Node, path: &[Node]) -> bool {
+    let mut seen: Vec<&Node> = Vec::new();
+    let mut stack: Vec<&Node> = vec![n];
+    while let Some(x) = stack.pop() {
+        for d in unit_graph.dependencies(x) {
+            if path.contains(d) {
+                return true;
+            }
+            if !seen.contains(&d) {
+                seen.push(d);
+                stack.push(d);
+            }
+        }
+    }
+    false
 }
 
 /// The external contracts of `inst` that are not `ok`, as

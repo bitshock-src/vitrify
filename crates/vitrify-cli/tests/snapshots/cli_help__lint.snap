@@ -2,7 +2,7 @@
 source: crates/vitrify-cli/tests/cli_help.rs
 expression: "long_help(&cmd, &path)"
 ---
-Mechanical authoring checks (L1–L11)
+Mechanical authoring checks (L1–L12)
 
 Usage: vitrify lint [OPTIONS]
 
@@ -22,9 +22,10 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
-Reads:   the SDD; the other SDDs it pins (L9); its changelog (L10); its TDD (L11)
+Reads:   the SDD; the other SDDs it pins (L9); its changelog (L10); its TDD (L11); for a
+         pin in depends_on, every SDD's units and contracts (L12)
 Writes:  nothing
-Prints:  `lint clean (L1–L11)`, or one `[L#] subject: cause → remediation` line per finding;
+Prints:  `lint clean (L1–L12)`, or one `[L#] subject: cause → remediation` line per finding;
          --all prefixes each line with the slug
          --json: {clean, findings: [{check, subject, cause, remediation}]};
          --all: an array of {sdd, root, clean, findings}

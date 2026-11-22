@@ -54,7 +54,7 @@ Pick the shape: a single file `specs/<scope>.sdd.md` (`vitrify new sdd
 otherwise a bundle `specs/<scope>/` (`vitrify new sdd --bundle`) — which is
 what lets parallel workers claim and stamp units without touching the same
 file. The normative rules live in the SDD schema (`vitrify schema show`);
-the SDD's front matter declares `schema_version: 2.0`.
+the SDD's front matter declares `schema_version: 2.1`.
 
 * Pin Technology Decisions exactly — language, runtime, every dependency
   version — and write the four **Commands** (bootstrap/build/test/lint).
@@ -95,9 +95,45 @@ the SDD's front matter declares `schema_version: 2.0`.
   contracts). Write the header, then run `vitrify pin sync --sdd <root>`,
   which records the hash. `vitrify pin list` shows each pin and whether it
   still matches its authority.
+* Classify every pin a unit consumes. **Code** — the unit imports or links
+  it, installs its package, or runs its CLI in its checks: list the pin in
+  `depends_on` as well as `consumes`; the unit then waits until the
+  producing SDD's units behind it are built, and is re-checked when their
+  code changes. **Interface or data** — the unit only codes against it or
+  parses it: `consumes` only; it builds beside the producer. Pins may run
+  both ways between two SDDs, but a cycle through `depends_on` is refused.
+  A transcription or an internal contract never goes in `depends_on`: name
+  the unit.
+* Make each package boundary a contract. An SDD whose code others install
+  or import publishes a contract for that package surface, produced by its
+  foundation unit; a consuming SDD's foundation unit lists that pin in
+  `depends_on`. Every unit depends on its foundation, so a change to
+  the foundation's files (lockfile, scaffold) re-checks every unit.
   A surface no SDD owns can only be **transcribed**: say so on the Producer
   line, name no contract id, and write the body yourself — it is listed as
   unchecked, because it is.
+* Write §5 commands that stay green while upstream SDDs are partly built:
+  guard on presence (skip, never fail, what an upstream has not built yet).
+  Keep a whole-suite Test command: a change re-checks only the units it
+  reaches, and the Test command, run at every gate, catches coupling the
+  declarations miss. Without one, every gate re-runs every unit's rows.
+* Write Verification rows that exercise what the unit uses, including the
+  behavior it gets from its dependencies: a dependency change that breaks
+  the unit must fail one of its rows, or its re-check proves nothing.
+* Keep every command safe beside other SDDs' commands, which run at the
+  same time: temp directories, ephemeral ports, no shared database, global
+  fixture or fixed path. Bound a runner that fans out across every core.
+* Reproduce upstream outputs in every checkout. Each SDD builds and gates
+  in its own fresh checkout of mainline, with no untracked or ignored
+  files: what a downstream needs from an upstream is committed by the
+  upstream's units, or rebuilt by the downstream's Bootstrap from the
+  upstream's sources. Nothing may depend on files left in another
+  checkout. Keep tool caches outside the checkout.
+* Give repository-wide inputs an owner. A path outside every SDD's
+  `scope_roots` is an input of every unit, so a change to it re-checks
+  everything. Put shared build inputs under an SDD the others depend on, or
+  list the outside paths the SDD's commands read in front matter:
+  `shared_inputs: [tools/, ci/shared.env]`.
 * Keep each contract's `Consumers:` line true to the units' `consumes`
   lists, and `version` / `updated` true to the last change entry.
 * Order the Execution Order foundation-first, with `[P]` groups of mutually
@@ -105,7 +141,7 @@ the SDD's front matter declares `schema_version: 2.0`.
 * Every consequential decision cites `TDD §n` or records a `D-###`.
 
 **Gate**: before setting `status: Active`, `vitrify lint` passes — the
-mechanical subset of the authoring checklist (L1–L11): acyclic dependencies,
+mechanical subset of the authoring checklist (L1–L12): acyclic dependencies,
 exclusive/exhaustive ownership, independent parallel groups, contract
 reference integrity (Consumers lines included), reading-set budgets,
 requirement coverage, pre-build state sanity, no `OPEN(Q-###)` in Ready
@@ -144,8 +180,9 @@ Then:
    tests when it changes. Only a boundary checker the SDD runs can verify
    this; vitrify does not read code.
 5. Keep Verified checks passing: a Verified unit's Verification commands
-   re-run at every preflight and every later integration, so they must hold
-   in every later state — a baseline's from before the code its tests judge
+   re-run whenever a change reaches them (at preflight, at each later
+   integration gate, in a re-check batch), so they must hold in every later
+   state — a baseline's from before the code its tests judge
    exists. The Test command is held to the same standard from the moment it
    first passes: Verification rows pick tests one by one and cannot see a
    suite that no longer collects, or another unit's test that broke.

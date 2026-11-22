@@ -29,6 +29,8 @@ Use this table to find the right source for a question.
 | what one worker is doing | [its log and its worktree](#follow-a-worker-session) |
 | what is in the gate | [`run.json`, the integration checkout, the process list](#inspect-the-gate) |
 | why an attempt did not land | [the five records of it](#find-why-an-attempt-did-not-land) |
+| how a run of several SDDs is going | [its lanes](#read-a-project-runs-lanes) · [its output](#read-a-project-runs-output) · [`project.json`](#read-the-project-record) |
+| why a unit is rotten, and what broke it | [the culprit line](#read-a-rotten-unit) |
 | what landed, and when | [`git log` and the journal](#read-the-history) |
 | whether mainline is sound | [`check`, `journal replay`, `run --dry-run`](#run-health-checks) |
 | whether the run is alive, and how it ended | [the record and the exit status](#tell-whether-a-run-is-alive) · the report under `vitrify run status` |
@@ -56,7 +58,7 @@ nohup vitrify run > run.out 2> run.err &
 
 ### The Job Header
 
-The header comes first, before anything is dispatched:
+The header comes first, before anything is dispatched. A run of one SDD prints this one; a project run prints [its own](#read-a-project-runs-output).
 
 ```text
 SDD build job — mini @ 1.0.0  [run-20261114T020735Z-p73116]
@@ -136,6 +138,63 @@ Blocked.
 
 The final report is kept: its lines — from `Complete.` or `Blocked.` on — are also written to `.vitrify/logs/<job>/report.txt` and to the run record as `report`. However the run's output was captured, or lost, `vitrify run status` prints the report once the run has ended (see [Check a Run's Status](#check-a-runs-status)).
 
+### Read a Project Run's Output
+
+A plain `vitrify run` in a repository of several SDDs is a project run, and it prints a project header in place of the job header:
+
+```text
+Project build job — 2 SDDs: 1 to build · 1 idle  [run-20261122T043831Z-p72112]
+Plan: regenerate 6 units · adopt 0 built attempts · re-check 0 units
+Critical path: core U-001 → api U-001 → api U-002 → api U-003 (4 units)
+Capacity: workers 4 · gate jobs 8 · lanes unlimited
+Watch: vitrify run status --job run-20261122T043831Z-p72112 --follow
+```
+
+The first line counts the SDDs by lane state and names the job. `Plan:` counts the units workers will regenerate, the built attempts the run adopts, and the units it re-checks. `Critical path:` is the longest chain of units that wait on each other, with its length: no worker count finishes the build sooner. `Capacity:` is the worker cap, the gate jobs, and the lane cap (`lanes unlimited`, or `lanes <n>`). `Watch:` is the command that follows the run. [Plan a Project Run](run-a-build.md#plan-a-project-run) shows the dry run's fuller plan.
+
+Every event line starts with its lane, `[<slug>]`. The lines of a one-SDD run, in [Event Lines](#event-lines), appear with that prefix, and a project run adds these. Use this table to read them.
+
+| Line | Means |
+| --- | --- |
+| `[api] re-check U-001, U-002` | a change in another SDD reached these Verified units; their rows run again, with no worker, once nothing they depend on has work pending |
+| `[api] re-checked U-001, U-002 at 17745d4` | they passed; the pass is recorded as a `verified` event by `recheck` at that commit |
+| `[api] U-002 adopted (built attempt c1) → gate` | an earlier attempt was built but never landed, and its inputs have not moved: it is claimed again and sent to the gate with no worker |
+| `[api] U-001 rotten: row 2 fails on mainline at 9a95258 — finding the culprit` | the row fails on the base commit too, so the change being checked did not break it; a culprit search starts |
+| `[api] U-001 row 2 broke at 3923e9c (core U-001 integrated) — culprit found` | the search's finding; [read it below](#read-a-rotten-unit) |
+
+Where a lane's preflight or re-check cannot run, stderr says so: `note: the re-check could not run: <command> failed at <commit>`, and `preflight: re-checked U-001 at <commit>` for the units a change reached since their last recorded check.
+
+The report is one line per SDD, sorted by slug, under `Complete.` or `Blocked.`:
+
+```text
+Complete.
+  api      Complete     2/2 Verified · re-checked 2 · §5 Test passing, no model calls
+  core     Complete     2/2 Verified · built 1 · §5 Test passing
+```
+
+```text
+Blocked.
+  api      Blocked      U-001 rotten: row 2 broke at 3923e9c (core U-001 integrated) — culprit found
+  core     Complete     2/2 Verified · built 1 · §5 Test passing
+```
+
+The state is `Complete`, `Up to date` (`nothing changed since <commit>`) or `Blocked`; the rest is what the lane did — `built <n>` by workers, `re-checked <n> (<slug> changed)`, `§5 Test passing`, and `, no model calls` when it only re-checked — or why it is blocked, with each further blocker indented below. The run is `Blocked.` when any SDD is. [Run a Build](run-a-build.md#resolve-a-blocked-build) maps each blocker to its fix.
+
+### Read a Rotten Unit
+
+A unit is **rotten** when its rows fail after a change upstream and fail on the base commit too: the change being checked did not break them. The run does not rebuild it. It reports the unit, searches the commits between the unit's last check and the base for the one that broke the row, and goes on with everything that does not depend on it. The search runs off the critical path, in a checkout of its own, under the gate pool. The line names the row's unit and number, and ends with one of:
+
+| Ending | Means |
+| --- | --- |
+| `broke at 3923e9c (core U-001 integrated) — culprit found` | the commit, and the unit whose integration made it: the upstream broke its contract, or the unit relied on more than the contract |
+| `is flaky: no commit since its last check broke it — fix the row (`<command>`); the unit is re-checked again` | no commit explains it, so the row is flaky; the unit is not held against, and is checked again |
+| `broke, culprit not found after <n> probes (most likely <commit>, <unit> integrated) — inconclusive` | the search ran out of probes; run the row on the commit named |
+| `broke, culprit not found after <n> probes (most likely flaky) — inconclusive` | no commit stands out |
+| `fails at its own last check — no commit to search — inconclusive` | the row failed when the unit was last checked |
+| `broke, culprit not searched (<why>) — inconclusive` | the search could not be set up |
+
+A rotten unit is reported in the final report as the lane's `Blocked` line, and the units that wait on it read `waits on api U-001 (rotten)` in `vitrify run status`. The `rotten` and `culprit` events carry the same text in `events.jsonl`; the `culprit` event's `flaky` field is `true` for a flaky verdict. [A Unit Is Rotten](../resources/troubleshooting.md#a-unit-is-rotten) says what to do next.
+
 ## Check a Run's Status
 
 `vitrify run status` shows what a run is doing, unit by unit. It is read-only — it writes no file, takes no lock, and runs git only in a way that never holds a worker's index lock — so run it from a second terminal as often as you like:
@@ -162,6 +221,30 @@ Logs: .vitrify/logs/run-20261116T140212Z-p48113/
 ```
 
 The header gives the job, whether it is `alive`, `died` or `ended`, the SDD and the harness; then the progress line. The table lists each attempt in progress: its claim (`TRY`), its stage, the time it has run against its budget, how long ago its log last grew and how big it is, and what it has changed in its worktree so far. Lines starting with `!` are warnings: a worker that has printed nothing for `--quiet-after` seconds (default 300), one near its budget, a run that died. `Finished` lists the attempts that ended, with why. Once the run has ended, `vitrify run status` also prints its final report under `Report:`, the same lines the run printed last. `--json` prints the same as one object — the report as `report`, a list of lines, after `terminated` — and `--job <job>` shows an earlier run; [`vitrify run status`](../cli/command-reference.md#vitrify-run-status) lists every field.
+
+### Read a Project Run's Lanes
+
+A run of several SDDs builds each in its own lane. Where the one-SDD view has the progress line, `vitrify run status` shows one line per lane, with the attempts, the gate and `Finished` below it:
+
+```text
+$ vitrify run status
+run-20261121T101500Z-p4242 · alive · 12m elapsed · specs/core, specs/api, specs/web · claude
+LANE  STATE       PROGRESS                                WAITS ON
+api   build       3/8 Verified · 2 in flight · 3 waiting
+core  complete    12/12 Verified
+web   idle        0/4 Verified · 4 waiting                api U-007, core U-002
+docs  up to date  4/4 Verified
+
+UNIT   TRY  STAGE    TIME     OUTPUT         WORK
+U-005  c1   editing  3m/45m   4s ago  41 KB  3 files +90 -2
+...
+```
+
+`STATE` is the lane's state in the run record: `idle` (units remain, but none can be claimed, is in flight or is due a re-check), `build`, `recheck`, `up to date`, `complete` or `blocked`. `PROGRESS` counts the lane's non-Retired units: `Verified/total`, the attempts in flight (running, or waiting for the gate), and the units that are neither. `WAITS ON` names, for an `idle` or `blocked` lane, the units of other lanes that hold its units back, and at most three of them, then `+N more`. A lane whose counts cannot be read, because its SDD is not in the checkout and the record has none, shows `?`. The attempt table lists the attempts of every lane. A run of one SDD prints the progress line and no lane table.
+
+`--json` adds `lanes` after `logs`: one object per lane, in the order of `project.json`, with `slug`, `root`, `state`, `verified`, `total`, `in_flight`, `waiting` and `waits_on`, a list of `<slug> <unit>` strings. `progress` is `null` when the run builds several SDDs. A job whose records are directly under `.vitrify/logs/<job>/` shows as one lane, in the state its end gives it.
+
+`vitrify run status --follow` prints a line when a lane's state changes — `[api]  idle → build` — and, in a run of several lanes, starts the label of each line about a lane's work with `[<slug>]`, as `[api] U-002 c1`. `--since-start` replays `events.jsonl`, whose lines name their lane the same way. A project run adds a line whenever the worker slots change — `run       pass: 1 working · 3 idle · 0 waiting`: workers running, slots idle, and ready units waiting for a slot — and one for each re-check, adoption, rotten unit and culprit finding, as `[api] U-001  rotten: …`.
 
 Use this table to read the stages.
 
@@ -211,11 +294,11 @@ A coding agent operating a run follows `vitrify brief run`. It relies on its har
 | Field | Holds |
 | --- | --- |
 | `job_id`, `pid`, `started_at` | the run: its ID, its process, when it began |
-| `sdd` | the SDD being built, as `--sdd` names it |
+| `sdd` | the SDD being built, as `--sdd` names it; in a project run, every lane's root, joined by commas (`specs/api, specs/core`) |
 | `harness` | the harness the workers run, such as `claude` (`""` when there is none) |
 | `params` | `cap`, `gate_jobs`, `lease_minutes`, `worker_timeout_minutes`, `abort_failed_waves` — as in effect |
 | `worktrees` | the worktree root |
-| `workers[]` | every worker dispatched, in order: `holder`, `pid` (also its process group), `unit`, `claim_seq`, `branch`, `worktree`, `started_at`, `ended_at`, `outcome`, `retry` (`true` when the attempt started from an earlier one's files), `detail` (why the attempt ended: the first line of the reason; `null` while it runs and for `verified`) |
+| `workers[]` | every worker dispatched, in order: `lane` (the SDD's slug), `holder`, `pid` (also its process group), `unit`, `claim_seq`, `branch`, `worktree`, `started_at`, `ended_at`, `outcome`, `retry` (`true` when the attempt started from an earlier one's files), `detail` (why the attempt ended: the first line of the reason; `null` while it runs and for `verified`) |
 | `reports[]` | each worker's report line, as received |
 | `escalations[]` | `evidence_path`, `verdict` |
 | `terminated` | absent while the run lives; then `state` (`complete`, `blocked`, `interrupted`, `error`), `at` and `detail` (for a Blocked run, its progress line and that the report names each blocker) |
@@ -245,16 +328,58 @@ jq '[.workers[] | select(.outcome == "running" or .outcome == "integrating")]' .
 jq '.terminated // "still running"' .vitrify/run.json
 ```
 
+## Read the Event Log
+
+`.vitrify/logs/<job>/events.jsonl` is evidence for a reader, not state: nothing reads it back to decide anything. Each line is one JSON object with the keys `at`, `event`, `unit`, `claim_seq` and `detail`, then the fields of its kind in key order; an event of a lane adds `lane`, its slug. Use this table to read the kinds.
+
+| `event` | Written when | Its fields |
+| --- | --- | --- |
+| `run-started` · `run-ended` | the run begins · ends | `cap`, `harness`, `sdd` · `state` |
+| `dispatched` | a worker starts on a unit | `holder`, `retry` |
+| `integrating` · `gate` · `outcome` | a unit reports built · the gate takes a step · an attempt ends | `step`, `batch` · `outcome`, `duration_s` |
+| `lane` | a lane's state changes | `from`, `to` |
+| `pass` | in a project run, the worker slots changed | `working`, `idle`, `waiting`, `cap` |
+| `recheck` | a lane starts re-checking dirty units | `units` |
+| `rechecked` | a re-check batch passed | `recorded` |
+| `adopted` | a built attempt is sent to the gate with no worker | `attempt`, `holder` |
+| `rotten` | a row fails on its base too | `row`, `base` |
+| `culprit` | a culprit search ended | `flaky` |
+
+A `pass` line is written only when its counts differ from the last. `working` is the workers running, `idle` the slots free, and `waiting` the ready units that found no slot; a slot is idle only when nothing ready waits for one. A run that keeps `idle` above zero for long has nothing ready: its critical path is the limit, not the cap.
+
+```sh
+jq -r 'select(.event == "pass") | "\(.at)  \(.detail)"' .vitrify/logs/<job>/events.jsonl
+jq -r 'select(.event == "rotten" or .event == "culprit") | .detail' .vitrify/logs/<job>/events.jsonl
+```
+
+## Read the Project Record
+
+`.vitrify/logs/<job>/project.json` describes a project run as planned and as it ran. It is rewritten at every change, and `ended_at` is `null` until the run ends. Use this table to read its fields.
+
+| Field | Holds |
+| --- | --- |
+| `job_id`, `started_at`, `ended_at` | the run, and when it began and ended |
+| `capacity` | `workers`, `gate_jobs`, and `lanes`, where `0` is no limit |
+| `lanes[]` | per SDD: `slug`, `root`, `records` (its directory under the job's logs), `state` (`idle`, `build`, `recheck`, `up to date`, `complete`, `blocked`), `units` (non-Retired), `verified`, and what the plan holds for it, `regenerate`, `adopt` and `recheck`, as counts |
+| `regenerate[]` | the units workers will build, each `{sdd, unit}` |
+| `adopt[]` | the built attempts to adopt: `sdd`, `unit`, `attempt` |
+| `recheck[]` | the units to re-check: `sdd`, `unit`, `why`, and `changed_units`, the units whose code changed |
+| `critical_path[]` | the critical path as planned, in order |
+| `critical_path_ran[]` | its units, as they landed |
+
+The counts and states are the plan's at the start, and the lane `state` moves as the run goes; `vitrify run status` shows the live counts. Compare `critical_path` with `critical_path_ran` to see whether the chain that bounds the build ran back to back.
+
 ## Follow a Worker Session
 
-Each run has a directory, `.vitrify/logs/<job>/`, holding its copy of the run record, its event log, the gate's progress, its final report, three files per worker and one per escalation. Use this table to find the file you need.
+Each run has a directory, `.vitrify/logs/<job>/`, holding its copy of the run record, `project.json`, its event log, its final report and one directory per lane, `<slug>/`, which holds the lane's own records: the gate's progress, three files per worker and one per escalation. `project.json` lists the lanes — each with its SDD, its slug and its state — and, in a project run, each lane's root and plan counts, the plan, and the critical path as it ran. A job without a `project.json` keeps everything in `.vitrify/logs/<job>/`. Use this table to find the file you need; the worker, gate and escalation files are in `.vitrify/logs/<job>/<slug>/`.
 
 | File | Holds |
 | --- | --- |
 | `worker-<job>-w<i>.out` | the session's stdout, written by the harness itself as it goes. The last line of the session's final text is the report |
 | `worker-<job>-w<i>.err` | its stderr |
 | `worker-<job>-w<i>.prompt.md` | exactly what the worker was started with: the job block, the procedure, the "This session" note (what was already done for it; what an earlier attempt left and why it failed) and the inlined reading set |
-| `events.jsonl` | the run's event log: one JSON object per line — dispatches, gate steps, outcomes, the end — appended as they happen. `vitrify run status --follow --since-start` replays it |
+| `project.json` | the lanes of the run and their states, rewritten at every change; with a project plan, also the plan and the critical path as it ran. `vitrify run status` reads it; [its fields are listed below](#read-the-project-record) |
+| `events.jsonl` | the run's event log: one JSON object per line — dispatches, gate steps, outcomes, the end — appended as they happen; a lane's lines name it in `lane`. `vitrify run status --follow --since-start` replays it; [the kinds are listed below](#read-the-event-log) |
 | `gate.json` | what the integrator is doing now: its step, the batch, the commands running. Rewritten at every change |
 | `report.txt` | the final report, written when the run prints it: the status line, the progress line, each blocker, the journal tail |
 | `escalation-<n>.json` | what the judge was shown — the unit, the failing command, the last 100 lines of its output, the journal tail — every reply it gave, and the verdict |
@@ -379,6 +504,7 @@ These checks are read-only and safe at any time, from the primary checkout:
 - `vitrify audit --skip-rotten` — the drift checks that execute nothing. Plain `vitrify audit` also re-runs every Verified unit's Verification commands in that checkout — the commands the gate runs, so expect the load.
 - `vitrify trace verify --unit U-###` — whether a Built or Verified unit's recorded inputs still match the spec; exit 3 names what changed (its own text, a contract, the global regions).
 - `vitrify lint --built` — the authoring checks a run preflights with: everything but L7, so that an SDD that is being built can still be held to the rest — a pin in step with its authority, a `Consumers:` line that is true, a version that has its change entry.
+- `vitrify locate --graph` — the edges between SDDs, unit to unit, that a project run orders by: where a unit waits on another SDD's unit, and through which pin.
 - `vitrify pin list` — every external contract, and whether each pin still matches its authority.
 - `vitrify ledger regen --check` — the ledger on disk is what unit front matter derives (exit 0; 3 names the first line that differs).
 - `vitrify run --dry-run [--sdd P]` — what a run started now would do: the whole preflight, the plan, the claims it would recover from a run that died, lapsed leases, a primary checkout that is behind. It publishes nothing and moves no file, and is safe beside a run that is going.
@@ -402,6 +528,7 @@ A run is in one of three conditions. Use these signs to tell which.
 | 0 | `Complete.` |
 | 2 | `Blocked.`, a preflight failure, or an `abort` verdict |
 | 1 | an error — the message is the last thing on stderr |
+| 4 | a project run that refuses an SDD at schema 2.0 whose units consume pins |
 | killed by a signal | interrupted, after cleaning up; a shell shows 130 (SIGINT), 143 (SIGTERM) or 129 (SIGHUP) |
 
 ## What Is Not Shown

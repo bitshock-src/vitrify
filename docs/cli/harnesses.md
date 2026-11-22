@@ -24,7 +24,7 @@ Install at least one harness by its vendor's instructions, and sign in. Every vi
 | `retry` | the worker for a unit whose earlier attempt did not land, with that attempt's files and the reason | occasional |
 | `escalation` | a one-shot verdict — `retry`, `release`, `block`, or `abort` — on a unit that keeps failing or a merge that conflicts | rare |
 
-Each worker starts from the recorded headless command plus its role's flags, with the generated worker prompt as the final argument, in a worktree outside your repository and with a `TMPDIR` of its own. Its output goes to `.vitrify/logs/<job>/`; its last line is its report.
+Each worker starts from the recorded headless command plus its role's flags, with the generated worker prompt as the final argument, in a worktree outside your repository and with a `TMPDIR` of its own. Its output goes to its lane's records, `.vitrify/logs/<job>/<slug>/` (the SDD's slug); its last line is its report.
 
 ## Probe Harnesses With init and probe
 
@@ -49,7 +49,7 @@ When several harnesses are recorded, `vitrify run` uses `harness.preferred` if i
 preferred = "codex"
 ```
 
-The job header's `Harness:` and `Roles:` lines show what a run selected.
+The job header of a run of one SDD shows what a run selected, in its `Harness:` and `Roles:` lines. A project run's header has no such lines; its `run-started` event in `events.jsonl` and `vitrify run status --json` name the harness.
 
 ## Configure Role Profiles
 
@@ -74,7 +74,7 @@ effort = "xhigh"
 args = []                               # optional extra argv, verbatim
 ```
 
-The role's flags are appended to the headless spelling the probe recorded, before the prompt. An empty `model` or `effort` omits its flag and leaves the harness's own default (its config file, env) in force; values pass through unvalidated, since each CLI owns its vocabulary. Unknown keys are refused by name. `vitrify probe` probes each role of each working harness, so a model the account cannot reach fails there rather than mid-run; the job header prints the selected harness's roles; a role profile that does not parse fails `vitrify probe` and `run` preflight. A repository's `.vitrify/config.toml` may override them for that repository, key by key: a `[harness.claude.worker]` table holding only `model = "sonnet"` changes the worker's model there and keeps its effort and `args`. `vitrify probe` probes the profiles of `~/.vitrify/config.toml` alone; `vitrify run` reads a repository's overrides, and its preflight refuses one that does not parse.
+The role's flags are appended to the headless spelling the probe recorded, before the prompt. An empty `model` or `effort` omits its flag and leaves the harness's own default (its config file, env) in force; values pass through unvalidated, since each CLI owns its vocabulary. Unknown keys are refused by name. `vitrify probe` probes each role of each working harness, so a model the account cannot reach fails there rather than mid-run; the job header of a run of one SDD prints the selected harness's roles; a role profile that does not parse fails `vitrify probe` and `run` preflight. A repository's `.vitrify/config.toml` may override them for that repository, key by key: a `[harness.claude.worker]` table holding only `model = "sonnet"` changes the worker's model there and keeps its effort and `args`. `vitrify probe` probes the profiles of `~/.vitrify/config.toml` alone; `vitrify run` reads a repository's overrides, and its preflight refuses one that does not parse.
 
 Use this table to read each key.
 
@@ -137,7 +137,7 @@ These notes apply only to Claude Code (`claude`).
 - The streaming spelling writes one JSON event per line. To print what a worker says as it says it:
 
   ```sh
-  tail -f .vitrify/logs/<job>/worker-<job>-w1.out \
+  tail -f .vitrify/logs/<job>/<slug>/worker-<job>-w1.out \
     | jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text'
   ```
 

@@ -23,6 +23,10 @@ abort_failed_waves = 2         # failed attempts of one unit before the
 worker_timeout_minutes = 120   # hard wall-clock budget per worker
 gate_jobs = 0                  # Verification rows run at once;
                                #   0 = one per CPU core, 1 = one at a time
+lane_cap = 0                   # lanes (one SDD's part of a run) holding their
+                               #   checkouts on disk at once; 0 = no limit
+priority = "depth"             # how ready units are ranked: "depth" (every unit
+                               #   weighs 1) or "history" (by past session times)
 poll_seconds = 30              # how often an idle run re-reads mainline
 worktree_dir = ""              # "" = ~/.vitrify/worktrees/<repo>-<hash>;
                                #   relative = from the repository root
@@ -47,19 +51,21 @@ Use this table to look up each setting, its default, and its override.
 | --- | --- | --- |
 | `schema` | `1` | The file format version, in `~/.vitrify/config.toml` and in a repository's `.vitrify/config.toml` alike. This vitrify reads version 1 and refuses any other value. |
 | `mainline` | `""` | The mainline branch. Empty resolves it in order: the primary checkout's current branch, then `origin/HEAD` (when the checkout is detached), then `main` or `master` — so a run started or resumed from a checkout on a build branch publishes to that branch. Overridden by `--mainline` and `VITRIFY_MAINLINE`. |
-| `run.worker_cap` | `4` | Maximum concurrent workers. Overridden by `--cap`. A single-file SDD always runs one. |
+| `run.worker_cap` | `4` | Maximum concurrent model sessions, across every lane of a run. Overridden by `--cap`. A single-file SDD's lane always runs one worker. |
 | `run.lease_minutes` | `60` | The claim lease that `vitrify run` and generated worker prompts use. `vitrify claim` and `renew` do not read it; they take `--lease-minutes` (default 60). |
 | `run.renew_fraction` | `0.25` | Renew a worker's lease when less than this fraction of it remains. |
 | `run.abort_failed_waves` | `2` | Failed attempts of one unit before the one escalation call; twice as many set the unit aside for the run. |
 | `run.worker_timeout_minutes` | `120` | Hard wall-clock budget per worker; the worker's process group is killed when it is spent. |
-| `run.gate_jobs` | `0` | Verification rows the gate, preflight, and `vitrify audit` run at once: `0` is one per CPU core, `1` is one at a time. Overridden by `--gate-jobs`. |
+| `run.gate_jobs` | `0` | Commands at once: one pool serves every §5 command and Verification row of every lane's gate, re-check, culprit probe, preflight and head check, and `vitrify audit` runs its rows at the same count. `0` is one per CPU core, `1` is one at a time. Overridden by `--gate-jobs`. |
+| `run.lane_cap` | `0` | Lanes holding their checkouts on disk at once in a project run — a lane's integration, base and culprit-probe checkouts count as one. A lane's checkout is made, and its §5 Bootstrap, Build and Lint run, when it is first admitted; units are taken highest priority first, so the lanes with the longest chains behind them are admitted first; and a lane with nothing left to do — no claim, re-check or culprit search, nothing ready or due — gives its checkouts back, so the next lane can be admitted. `0` (or less) is no limit: each lane's checkout is made at its first build or re-check and kept. There is no flag: set it in the file or with `VITRIFY_RUN_LANE_CAP`. |
+| `run.priority` | `"depth"` | How a project run ranks the units that are ready. `"depth"` weighs every unit 1, so a unit's priority is the number of unfinished units on the longest chain from it to the end of the graph, itself included. `"history"` weighs a unit by how long its past worker sessions took, read from the records earlier runs left under `.vitrify/logs/` (the median, in seconds, of its last five sessions that verified, or of its last five finished sessions when none did; a unit with no history takes the median of the known weights, or 1 when none is known), so the priority is the longest chain by estimated duration. Ties break by SDD slug, then unit id. Any other value is refused (exit 2). There is no flag: overridden by `VITRIFY_RUN_PRIORITY`. |
 | `run.poll_seconds` | `30` | How often an idle run re-reads mainline for a spec change, a lapsed lease, or another holder's release. |
-| `run.worktree_dir` | `""` | Where unit worktrees and the integration checkout live. Empty is `~/.vitrify/worktrees/<repo>-<hash>`; a relative path is taken from the repository root. |
+| `run.worktree_dir` | `""` | Where unit worktrees and each SDD's integration checkout live. Empty is `~/.vitrify/worktrees/<repo>-<hash>`; a relative path is taken from the repository root. |
 | `run.status_check_seconds` | `270` | How often an agent operating a run checks `vitrify run status` when its harness cannot notify it that the run ended. `vitrify brief run` prints the configured value; the run itself does not read it. See [Why 270 Seconds](#why-270-seconds). |
 | `harness.preferred` | `""` | The harness `vitrify run` uses. Empty takes the first the probe recorded, of `claude`, `codex`, `opencode`. |
 | `lint.readset_budget_bytes` | `65536` | The per-unit reading-set budget for lint L5 and `vitrify readset --budget`. Bytes by design: tokenizers differ between models. |
 
-A value of the wrong type — a `run.status_check_seconds` that is not a positive integer, for one — or a file that does not parse, is an error that names the key and the file (exit 2). Every command but `vitrify init` reads both files before it does anything else, so such an error stops any command alike, whether or not it uses the setting.
+A value of the wrong type — a `run.status_check_seconds` that is not a positive integer, a `run.priority` that is neither `depth` nor `history`, for example — or a file that does not parse, is an error that names the key and the file (exit 2). Every command but `vitrify init` reads both files before it does anything else, so such an error stops any command alike, whether or not it uses the setting.
 
 The role profiles resolve the same way, key by key: a repository's `[harness.claude.worker]` table holding only `model = "sonnet"` changes the worker's model in that repository and keeps its effort and arguments from `~/.vitrify/config.toml`. See [Configure Role Profiles](harnesses.md#configure-role-profiles).
 
@@ -76,6 +82,8 @@ Settings resolve in this order, first match wins: CLI flags > `VITRIFY_*` env > 
 | `VITRIFY_RUN_ABORT_FAILED_WAVES` | `run.abort_failed_waves` |
 | `VITRIFY_RUN_WORKER_TIMEOUT_MINUTES` | `run.worker_timeout_minutes` |
 | `VITRIFY_RUN_GATE_JOBS` | `run.gate_jobs` |
+| `VITRIFY_RUN_LANE_CAP` | `run.lane_cap` |
+| `VITRIFY_RUN_PRIORITY` | `run.priority` |
 | `VITRIFY_RUN_POLL_SECONDS` | `run.poll_seconds` |
 | `VITRIFY_RUN_WORKTREE_DIR` | `run.worktree_dir` |
 | `VITRIFY_RUN_STATUS_CHECK_SECONDS` | `run.status_check_seconds` |
@@ -94,7 +102,7 @@ Two more variables are read directly. Use this table to find them.
 These settings change speed, never results.
 
 - `worker_cap` is how many units build at once. Dispatch is continuous, so a bundle with wide parallelism uses a large cap fully.
-- `gate_jobs` is how many Verification rows run at once — in the gate, in preflight and in `vitrify audit`. The default follows the machine: one per CPU core available to the process, the rule `cargo test` uses for its test threads. As there, the checks are expected to be independent of each other — the protocol already asks that rows be hermetic — and a number is the opt-out: `gate_jobs = 1` (`--gate-jobs 1`, `VITRIFY_RUN_GATE_JOBS=1`) runs them one at a time, which is right when rows change shared state other rows read. A row that fails while others were running is run once more alone before it counts, so rows that merely disturb each other cannot turn a gate red. Each row has a `TMPDIR` of its own, so a tool that keeps a cross-process lock there (uv does, per project) does not hold other rows off: let the Bootstrap command bring the environment up to date, so that rows only read it. Bootstrap, build, lint and the Test command always run on their own.
+- `gate_jobs` is how many commands run at once — one pool for the whole run, however many lanes gate, re-check or probe at once; the rows are the bulk of them — and how many rows `vitrify audit` runs at once. The default follows the machine: one per CPU core available to the process, the rule `cargo test` uses for its test threads. As there, the checks are expected to be independent of each other — the protocol already asks that rows be hermetic — and a number is the opt-out: `gate_jobs = 1` (`--gate-jobs 1`, `VITRIFY_RUN_GATE_JOBS=1`) runs them one at a time, which is right when rows change shared state other rows read. A row that fails while others were running is run once more alone before it counts, so rows that merely disturb each other cannot turn a gate red. Each row has a `TMPDIR` of its own, so a tool that keeps a cross-process lock there (uv does, per project) does not hold other rows off: let the Bootstrap command bring the environment up to date, so that rows only read it. Within a gate, Bootstrap, build, lint and the Test command run one at a time, each holding one token; other lanes' commands run beside them within the pool.
 - `worktree_dir` is where builds happen. Wherever it is, it must not be under a directory an ignore file of the repository covers. A `worktree_dir` inside the working tree is excluded through `.git/info/exclude`, and refused if one of the repository's ignore files covers it.
 
 ## Why 270 Seconds
@@ -131,11 +139,12 @@ vitrify writes only under `~/.vitrify/`, the repository's `.vitrify/`, your syst
 | --- | --- | --- |
 | `~/.vitrify/config.toml` | `vitrify init`; its `[probe]` tables, `vitrify probe` | every setting, the role profiles, and the recorded headless command per harness |
 | `~/.vitrify/briefs/`, `schemas/`, `templates/` | `vitrify init`; restored and refreshed by the commands that read them | materialized content |
-| `~/.vitrify/worktrees/<repo>-<hash>/` | `vitrify run` | the integration checkout and one worktree per attempt |
+| `~/.vitrify/worktrees/<repo>-<hash>/` | `vitrify run` | per SDD, its integration checkout, base checkout and culprit probe checkout; one worktree per attempt |
 | `<repo>/.vitrify/run.json` | `vitrify run` | a snapshot of the latest run |
-| `<repo>/.vitrify/logs/<job>/` | `vitrify run` | the run record copy, worker logs and prompts, escalation evidence |
-| `<repo>/.vitrify/logs/<job>/gate.json` | `vitrify run` | what the integrator is doing now, for `vitrify run status` |
-| `<repo>/.vitrify/logs/<job>/events.jsonl` | `vitrify run` | the run's event log, one JSON object per line, appended as it happens |
+| `<repo>/.vitrify/logs/<job>/` | `vitrify run` | the run record copy |
+| `<repo>/.vitrify/logs/<job>/project.json` | `vitrify run` | what the run will do, each lane's state, unit and Verified counts (kept current) and records directory, the critical path as it ran, for `vitrify run status` |
+| `<repo>/.vitrify/logs/<job>/<slug>/` | `vitrify run` | one lane's records: worker logs and prompts, escalation evidence, and `gate.json`, what its integrator is doing now, for `vitrify run status` |
+| `<repo>/.vitrify/logs/<job>/events.jsonl` | `vitrify run` | the run's event log, one JSON object per line, appended as it happens, a lane's events naming it |
 | `<repo>/.vitrify/logs/<job>/report.txt` | `vitrify run` | the run's final report, for `vitrify run status` |
 | `<repo>/.vitrify/jobs/<job>.lock` | `vitrify run` | the lock that marks a run alive |
 | `<repo>/.vitrify/tx-*` | `claim`, `renew`, `release`, `vitrify run` | throwaway checkouts for mainline transactions |

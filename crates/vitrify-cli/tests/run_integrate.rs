@@ -309,9 +309,9 @@ impl View {
         self.wt_root.join(format!("{}-{unit}-c{seq}", self.slug))
     }
 
-    /// The integration checkout.
+    /// The SDD's integration checkout.
     fn mainline(&self) -> PathBuf {
-        self.wt_root.join("mainline")
+        self.wt_root.join(format!("mainline-{}", self.slug))
     }
 
     fn ml(&self) -> Mainline {
@@ -319,6 +319,7 @@ impl View {
             primary: Git::new(&self.root),
             layout: Layout::at(&self.root, &self.wt_root),
             sdd_rel: self.sdd_rel.clone(),
+            slug: self.slug.clone(),
             branch: "main".to_string(),
             push: false,
         }

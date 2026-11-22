@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use vitrify_core::claims::{self, Op};
 use vitrify_core::config::Overrides;
+use vitrify_core::graph::{self, Node};
 use vitrify_core::journal;
 use vitrify_core::model::{self, Instance, UtcTime};
 use vitrify_core::{CoreError, ledger, yamlish};
@@ -170,7 +171,20 @@ fn attempt_loop(
         // -- preconditions at this head
         let inst = load_tx_instance(tx, args.sdd.as_deref(), sdd_rel, &primary.dir)?;
         let now = UtcTime::now();
-        let plan = claims::plan(
+        // a pin in depends_on waits on units of other SDDs: their statuses
+        // are read in the same checkout, at the same base
+        let unit_graph = if super::reaches_out(&inst) {
+            Some(super::repo_graph(tx, Some(&inst))?)
+        } else {
+            None
+        };
+        let node = Node::new(graph::slug_of(&inst), args.unit.as_str());
+        let no_graph = |_: &str| None;
+        let resolve: model::Resolve = match &unit_graph {
+            Some(g) => &g.resolver(&node),
+            None => &no_graph,
+        };
+        let plan = claims::plan_with(
             &inst,
             op,
             &args.unit,
@@ -178,6 +192,7 @@ fn attempt_loop(
             args.lease_minutes,
             now,
             lost_race_before,
+            resolve,
         )?;
 
         // -- build the commit: front matter + journal + ledger
@@ -206,45 +221,7 @@ fn attempt_loop(
         let new = txgit.rev_parse("HEAD").map_err(CoreError::from)?;
 
         // -- publish atomically
-        let won = if push {
-            // Push from the primary checkout: the commit lives in the shared
-            // object store.
-            match primary.push_cas(&new, mainline) {
-                Ok(()) => {
-                    if let Some(cur) = primary
-                        .verify_ref(&format!("refs/heads/{mainline}"))
-                        .map_err(CoreError::from)?
-                    {
-                        if primary.is_ancestor(&cur, &new).map_err(CoreError::from)? {
-                            // the checkout follows a branch that moved, and
-                            // only then
-                            if primary
-                                .update_ref_cas(&format!("refs/heads/{mainline}"), &new, &cur)
-                                .is_ok()
-                            {
-                                resync_primary(primary, mainline, &cur, &new)?;
-                            }
-                        } else {
-                            diag(&format!(
-                                "warning: local {mainline} diverged from origin; not updating the local branch"
-                            ));
-                        }
-                    }
-                    true
-                }
-                Err(GitError::LostRace { .. }) => false,
-                Err(e) => return Err(e.into()),
-            }
-        } else {
-            match primary.update_ref_cas(&format!("refs/heads/{mainline}"), &new, &base) {
-                Ok(()) => {
-                    resync_primary(primary, mainline, &base, &new)?;
-                    true
-                }
-                Err(GitError::LostRace { .. }) => false,
-                Err(e) => return Err(e.into()),
-            }
-        };
+        let won = publish_commit(primary, push, mainline, &new, &base)?;
 
         if won {
             return Ok(ClaimOutcome {
@@ -267,6 +244,234 @@ fn attempt_loop(
         5,
         format!("error: lost race for {} after retries", args.unit),
     ))
+}
+
+/// Move mainline from `base` to `new` — a push when origin arbitrates, else
+/// the local compare-and-swap — and bring the primary checkout along.
+/// `false` = lost the race.
+fn publish_commit(
+    primary: &Git,
+    push: bool,
+    mainline: &str,
+    new: &str,
+    base: &str,
+) -> Result<bool, CoreError> {
+    if push {
+        // Push from the primary checkout: the commit lives in the shared
+        // object store.
+        match primary.push_cas(new, mainline) {
+            Ok(()) => {
+                if let Some(cur) = primary
+                    .verify_ref(&format!("refs/heads/{mainline}"))
+                    .map_err(CoreError::from)?
+                {
+                    if primary.is_ancestor(&cur, new).map_err(CoreError::from)? {
+                        // the checkout follows a branch that moved, and only
+                        // then
+                        if primary
+                            .update_ref_cas(&format!("refs/heads/{mainline}"), new, &cur)
+                            .is_ok()
+                        {
+                            resync_primary(primary, mainline, &cur, new)?;
+                        }
+                    } else {
+                        diag(&format!(
+                            "warning: local {mainline} diverged from origin; not updating the local branch"
+                        ));
+                    }
+                }
+                Ok(true)
+            }
+            Err(GitError::LostRace { .. }) => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    } else {
+        match primary.update_ref_cas(&format!("refs/heads/{mainline}"), new, base) {
+            Ok(()) => {
+                resync_primary(primary, mainline, base, new)?;
+                Ok(true)
+            }
+            Err(GitError::LostRace { .. }) => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+/// One unit to claim in a [`claim_many`] transaction.
+#[derive(Debug, Clone)]
+pub struct BatchClaim {
+    /// The unit's SDD, as a path from the repository root.
+    pub sdd_rel: PathBuf,
+    pub unit: String,
+    pub holder: String,
+}
+
+/// Claim several units — of one SDD or of several — in one mainline
+/// transaction: one commit, one compare-and-swap or push. Each unit's
+/// preconditions are checked at the transaction's base, as a claim of its
+/// own would check them; a unit that is no longer claimable there is left
+/// out (its result says why), the rest are claimed together. Each claimed
+/// unit gets its own front-matter edits, its own fencing token and its own
+/// `claim` journal event, exactly as a claim of its own would. A lost race
+/// resyncs and tries again with what is still claimable. Results are
+/// index-aligned with `claims`; `Err` only for a failure that is no unit's.
+pub fn claim_many(
+    primary: &Git,
+    push: bool,
+    mainline: &str,
+    lease_minutes: i64,
+    claims: &[BatchClaim],
+) -> Result<Vec<Result<ClaimOutcome, CoreError>>, CoreError> {
+    let mut out: Vec<Option<Result<ClaimOutcome, CoreError>>> =
+        claims.iter().map(|_| None).collect();
+    if claims.is_empty() {
+        return Ok(Vec::new());
+    }
+    let scratch = crate::layout::ensure_scratch(&primary.dir)?;
+    let _turn = tx_lock();
+    let n = TX_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let tx = scratch.join(format!("tx-{}-{n}", std::process::id()));
+    let result = (|| -> Result<(), CoreError> {
+        let mut lost_race_before = false;
+        for attempt in 0..3 {
+            let base = if push {
+                let _ = primary.fetch_origin(mainline);
+                primary
+                    .rev_parse(&format!("refs/remotes/origin/{mainline}"))
+                    .map_err(CoreError::from)?
+            } else {
+                primary
+                    .rev_parse(&format!("refs/heads/{mainline}"))
+                    .map_err(CoreError::from)?
+            };
+            if tx.exists() {
+                let txgit = primary.at(&tx);
+                txgit.reset_hard(&base).map_err(CoreError::from)?;
+                txgit.clean_fdq().map_err(CoreError::from)?;
+            } else {
+                primary
+                    .worktree_add(&tx, &base, true)
+                    .map_err(CoreError::from)?;
+            }
+            let now = UtcTime::now();
+            let mut planned: Vec<(usize, claims::TxPlan, String)> = Vec::new();
+            for (i, c) in claims.iter().enumerate() {
+                if out[i].is_some() {
+                    continue; // judged already: left out for good
+                }
+                // each unit read afresh: an earlier one may share its file
+                let inst = load_tx_instance(&tx, None, Some(&c.sdd_rel), &primary.dir)?;
+                let unit_graph = if super::reaches_out(&inst) {
+                    Some(super::repo_graph(&tx, Some(&inst))?)
+                } else {
+                    None
+                };
+                let node = Node::new(graph::slug_of(&inst), c.unit.as_str());
+                let no_graph = |_: &str| None;
+                let resolve: model::Resolve = match &unit_graph {
+                    Some(g) => &g.resolver(&node),
+                    None => &no_graph,
+                };
+                let plan = match claims::plan_with(
+                    &inst,
+                    Op::Claim,
+                    &c.unit,
+                    &c.holder,
+                    lease_minutes,
+                    now,
+                    lost_race_before,
+                    resolve,
+                ) {
+                    Ok(plan) => plan,
+                    Err(e) if e.exit_code() == 4 => {
+                        // no longer claimable at this base
+                        out[i] = Some(Err(e));
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                };
+                let Some(unit) = inst.unit(&c.unit).cloned() else {
+                    continue;
+                };
+                let handle = inst.handle();
+                model::rewrite_unit_meta(&handle, &unit, |inner| {
+                    let mut block = inner.to_string();
+                    for (k, v) in &plan.edits {
+                        block = yamlish::set_scalar_in_place(&block, k, v);
+                    }
+                    block
+                })?;
+                let (events, _) = journal::read(&handle)?;
+                let mut event = plan.event.clone();
+                event.seq = events.last().map(|e| e.seq).unwrap_or(0) + 1;
+                event.commit = Some(base[..7.min(base.len())].to_string());
+                journal::append_line(&handle, &journal::render_line(&event))?;
+                let fresh = Instance::load(handle.clone())?;
+                ledger::regen(&fresh, &now.format_date())?;
+                planned.push((i, plan, graph::slug_of(&fresh).to_string()));
+            }
+            if planned.is_empty() {
+                return Ok(());
+            }
+            // one unit: the message a claim of its own makes; several of one
+            // SDD: their ids; of several SDDs: each with its slug
+            let one_sdd = planned.iter().all(|(_, _, s)| *s == planned[0].2);
+            let message = match planned.as_slice() {
+                [(_, plan, _)] => plan.commit_message.clone(),
+                many => format!(
+                    "sdd: claim {}",
+                    many.iter()
+                        .map(|(i, p, slug)| if one_sdd {
+                            format!("{} (c{})", claims[*i].unit, p.claim_seq)
+                        } else {
+                            format!("{slug} {} (c{})", claims[*i].unit, p.claim_seq)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            };
+            let txgit = primary.at(&tx);
+            txgit.add_all().map_err(CoreError::from)?;
+            txgit.commit(&message).map_err(CoreError::from)?;
+            let new = txgit.rev_parse("HEAD").map_err(CoreError::from)?;
+            if publish_commit(primary, push, mainline, &new, &base)? {
+                for (i, plan, _) in planned {
+                    out[i] = Some(Ok(ClaimOutcome {
+                        unit: claims[i].unit.clone(),
+                        op: Op::Claim,
+                        holder: claims[i].holder.clone(),
+                        claim_seq: plan.claim_seq,
+                        claim_expires: plan.claim_expires.clone(),
+                        commit: new.clone(),
+                        mainline: mainline.to_string(),
+                    }));
+                }
+                return Ok(());
+            }
+            lost_race_before = true;
+            diag(&format!(
+                "note: lost publish race on {mainline} (attempt {}); resyncing",
+                attempt + 1
+            ));
+        }
+        Ok(())
+    })();
+    if tx.exists() {
+        let _ = primary.worktree_remove(&tx);
+    }
+    result?;
+    Ok(out
+        .into_iter()
+        .zip(claims)
+        .map(|(r, c)| {
+            r.unwrap_or_else(|| {
+                Err(CoreError::refusal(
+                    5,
+                    format!("error: lost race for {} after retries", c.unit),
+                ))
+            })
+        })
+        .collect())
 }
 
 /// Load the instance inside the tx worktree. `--sdd` names the SDD as seen

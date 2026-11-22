@@ -44,8 +44,9 @@ Use this table to check which `schema_version` values vitrify reads. When the ve
 
 | `schema_version` | Status |
 | --- | --- |
-| `2.0` (also written `2` or `2.0.x`) | Supported; the one version this vitrify reads. |
-| absent, or any other value | Refused with exit 4; the message names the version this vitrify reads. `vitrify locate` still lists the SDD. |
+| `2.1` (also written `2.1.x`) | Supported; what `vitrify new sdd` writes. A unit's `depends_on` may name a pin of its own SDD, which a project run reads as an edge to the units that produce it. |
+| `2.0` (also written `2` or `2.0.x`) | Supported; builds alone with `--sdd`. A pin in `depends_on` is a lint L1 finding, and a project run refuses (exit 4) while an SDD at 2.0 has units that consume pins. |
+| absent, or any other value | Refused with exit 4; the message names the versions this vitrify reads. `vitrify locate` still lists the SDD. |
 
 ## Build Toolchain
 

@@ -149,20 +149,39 @@ pub fn front_matter(text: &str) -> Option<Meta> {
 
 // --------------------------------------------------------- schema version
 
-/// The schema versions this vitrify reads: exactly one, `2.0`. The type
-/// names each readable version so a later release can read more than one.
+/// The schema versions this vitrify reads. 2.1 adds one thing to 2.0: a
+/// unit's `depends_on` may name a pin of its own SDD, to wait for the units
+/// that produce the pinned contract in another SDD. Every 2.0 document means
+/// the same under 2.1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Schema {
     V2_0,
+    V2_1,
 }
 
 impl Schema {
-    /// The version this vitrify reads, as an SDD declares it.
-    pub const READ: Schema = Schema::V2_0;
+    /// Every version this vitrify reads, oldest first.
+    pub const READ: [Schema; 2] = [Schema::V2_0, Schema::V2_1];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Schema::V2_0 => "2.0",
+            Schema::V2_1 => "2.1",
+        }
+    }
+
+    /// Whether a unit's `depends_on` may name a pin of its own SDD.
+    pub fn pins_in_depends_on(self) -> bool {
+        self >= Schema::V2_1
+    }
+
+    /// The versions this vitrify reads, as a refusal names them:
+    /// `2.0 and 2.1`.
+    pub fn read_list() -> String {
+        let names: Vec<&str> = Schema::READ.iter().map(|s| s.as_str()).collect();
+        match names.split_last() {
+            Some((last, init)) if !init.is_empty() => format!("{} and {last}", init.join(", ")),
+            _ => names.concat(),
         }
     }
 }
@@ -177,8 +196,8 @@ pub enum SchemaRefusal {
 }
 
 /// The schema version an SDD's front matter declares: `2`, `2.0` and
-/// `2.0.x` are 2.0. The key is required; anything else is a version this
-/// vitrify does not read.
+/// `2.0.x` are 2.0; `2.1` and `2.1.x` are 2.1. The key is required;
+/// anything else is a version this vitrify does not read.
 pub fn schema_of(meta: &Meta) -> Result<Schema, SchemaRefusal> {
     let raw = meta.get_str("schema_version").unwrap_or("").trim();
     if is_empty_marker(raw) {
@@ -194,14 +213,15 @@ pub fn schema_of(meta: &Meta) -> Result<Schema, SchemaRefusal> {
     }
     match (major, minor) {
         (Some(Some(2)), Some(0)) => Ok(Schema::V2_0),
+        (Some(Some(2)), Some(1)) => Ok(Schema::V2_1),
         _ => Err(SchemaRefusal::Unread(raw.to_string())),
     }
 }
 
 /// The refusal (exit 4) for an SDD whose schema version this vitrify does
-/// not read, naming the version it does.
+/// not read, naming the versions it does.
 pub fn schema_refusal(file: &Path, why: &SchemaRefusal) -> CoreError {
-    let read = Schema::READ.as_str();
+    let read = Schema::read_list();
     let what = match why {
         SchemaRefusal::Missing => format!("schema_version is missing; this vitrify reads {read}"),
         SchemaRefusal::Unread(written) => {
@@ -554,11 +574,11 @@ impl Instance {
         self.units.iter().find(|u| u.unit == uid)
     }
 
-    /// The schema version the SDD declares ([`schema_of`]); the version
-    /// this vitrify reads for an instance built without [`Instance::load`]'s
-    /// check.
+    /// The schema version the SDD declares ([`schema_of`]); 2.0, the
+    /// version that permits least, for an instance built without
+    /// [`Instance::load`]'s check.
     pub fn schema(&self) -> Schema {
-        schema_of(&self.meta).unwrap_or(Schema::READ)
+        schema_of(&self.meta).unwrap_or(Schema::V2_0)
     }
 }
 
@@ -1024,6 +1044,26 @@ pub fn stamp_version(stamp: &str) -> String {
     "—".to_string()
 }
 
+/// A `depends_on` entry that names no unit of the SDD, as the caller's
+/// resolver gave it: the units of the repository it waits on — for a pin,
+/// the units on its authority's `Producer:` line — each named
+/// `<slug> <unit>`, with its status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Through {
+    pub entry: String,
+    pub units: Vec<(String, String)>,
+}
+
+/// What a caller knows of `depends_on` entries that name no unit of the
+/// SDD: `Some(units)` with each unit's `(<slug> <unit>, status)` when the
+/// entry resolves, `None` when it does not.
+pub type Resolve<'a> = &'a dyn Fn(&str) -> Option<Vec<(String, String)>>;
+
+/// Whether a dependency in this status lets its dependents be claimed.
+pub fn is_done(status: &str) -> bool {
+    status == "Built" || status == "Verified"
+}
+
 /// The computed per-unit view (the kit's `unit_view`): dependency statuses,
 /// lease state, and the claimable predicate.
 #[derive(Debug, Clone)]
@@ -1032,7 +1072,13 @@ pub struct UnitView {
     pub status: String,
     pub parallel_group: Option<String>,
     /// (dep, status) in listed order; status `MISSING` for unknown deps.
+    /// An entry resolved through [`unit_view_with`]'s resolver carries
+    /// `Verified` when every unit it waits on is Verified, `Built` when each
+    /// is Built or Verified, otherwise the status of the first that is not.
     pub depends_on: Vec<(String, String)>,
+    /// The entries of `depends_on` that the resolver resolved, in listed
+    /// order, with the units they wait on.
+    pub through: Vec<Through>,
     pub claimed_by: Option<String>,
     /// Re-formatted `%Y-%m-%dT%H:%M:%SZ` when parseable.
     pub claim_expires: Option<String>,
@@ -1042,24 +1088,48 @@ pub struct UnitView {
     pub file: PathBuf,
 }
 
+/// The view of `u` among its SDD's units `all`. A `depends_on` entry that
+/// names none of them is `MISSING`, so the unit is not claimable: without
+/// the repository's other SDDs nothing says what a pin waits on.
 pub fn unit_view(u: &Unit, all: &[Unit], now: UtcTime) -> UnitView {
+    unit_view_with(u, all, now, &|_| None)
+}
+
+/// [`unit_view`] with `resolve` answering for the `depends_on` entries that
+/// name no unit of `all` — a pin, which waits on the units that produce its
+/// authority in another SDD. Such an entry is met only when it resolves to
+/// at least one unit and every one is Built or Verified; one that does not
+/// resolve is `MISSING`, as in [`unit_view`].
+pub fn unit_view_with(u: &Unit, all: &[Unit], now: UtcTime, resolve: Resolve) -> UnitView {
     let m = &u.meta;
     let status = m.get_str_or("status", "Draft").to_string();
     let deps = m.get_list("depends_on");
+    let mut through: Vec<Through> = Vec::new();
     let dep_status: Vec<(String, String)> = deps
         .iter()
         .map(|d| {
-            let s = all
-                .iter()
-                .find(|x| &x.unit == d)
-                .map(|x| x.meta.get_str_or("status", "Draft").to_string())
-                .unwrap_or_else(|| "MISSING".to_string());
+            if let Some(x) = all.iter().find(|x| &x.unit == d) {
+                return (d.clone(), x.meta.get_str_or("status", "Draft").to_string());
+            }
+            let s = match resolve(d) {
+                Some(units) if !units.is_empty() => {
+                    let s = match units.iter().find(|(_, s)| !is_done(s)) {
+                        Some((_, s)) => s.clone(),
+                        None if units.iter().all(|(_, s)| s == "Verified") => "Verified".into(),
+                        None => "Built".into(),
+                    };
+                    through.push(Through {
+                        entry: d.clone(),
+                        units,
+                    });
+                    s
+                }
+                _ => "MISSING".to_string(),
+            };
             (d.clone(), s)
         })
         .collect();
-    let deps_ok = dep_status
-        .iter()
-        .all(|(_, s)| s == "Built" || s == "Verified");
+    let deps_ok = dep_status.iter().all(|(_, s)| is_done(s));
     let expires = UtcTime::parse(m.get_str_or("claim_expires", ""));
     let lease_live = status == "Claimed" && expires.is_some_and(|e| e > now);
     let claimable =
@@ -1077,6 +1147,7 @@ pub fn unit_view(u: &Unit, all: &[Unit], now: UtcTime) -> UnitView {
         status,
         parallel_group,
         depends_on: dep_status,
+        through,
         claimed_by,
         claim_expires: expires.map(UtcTime::format),
         claim_seq: m.get_int("claim_seq"),
@@ -1089,4 +1160,9 @@ pub fn unit_view(u: &Unit, all: &[Unit], now: UtcTime) -> UnitView {
 /// The claimable predicate alone.
 pub fn is_claimable(u: &Unit, all: &[Unit], now: UtcTime) -> bool {
     unit_view(u, all, now).claimable
+}
+
+/// The claimable predicate alone, with [`unit_view_with`]'s resolver.
+pub fn is_claimable_with(u: &Unit, all: &[Unit], now: UtcTime, resolve: Resolve) -> bool {
+    unit_view_with(u, all, now, resolve).claimable
 }

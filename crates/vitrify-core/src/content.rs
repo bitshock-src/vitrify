@@ -26,7 +26,7 @@ pub const ASSETS: &[Asset] = &[
     Asset {
         rel_path: "briefs/authoring.md",
         body: include_str!("../assets/briefs/authoring.md"),
-        sha256: "53df333d7fe2fa7c2e0632b626145d337708baa921272bfbc322aa4e84fb2089",
+        sha256: "26a134081e5aeb1d1566a8582450133ee31d13c4442d9f1f796e850d9ad228d6",
     },
     Asset {
         rel_path: "briefs/build-unit.md",
@@ -36,7 +36,7 @@ pub const ASSETS: &[Asset] = &[
     Asset {
         rel_path: "briefs/change.md",
         body: include_str!("../assets/briefs/change.md"),
-        sha256: "da57a1e8b7b56c1d0c0a03a082bf27ea90f2a03ebfe5e02740e394afff9475c0",
+        sha256: "8e7a973719e296c6d17f97f1f6065f5bdadd994bf45974c51ea8ec318daf381a",
     },
     Asset {
         rel_path: "briefs/escalation.md",
@@ -46,7 +46,7 @@ pub const ASSETS: &[Asset] = &[
     Asset {
         rel_path: "briefs/integrate.md",
         body: include_str!("../assets/briefs/integrate.md"),
-        sha256: "bfe09125cc54ccf2accab5a9003755b3c85ac88132368f598924326f6adca6c0",
+        sha256: "cc8b6893ad255ebfabe3714e27f72951b480a4be439dd1600ab585dd3059c07d",
     },
     Asset {
         rel_path: "briefs/kickoff.md",
@@ -61,12 +61,12 @@ pub const ASSETS: &[Asset] = &[
     Asset {
         rel_path: "briefs/run.md",
         body: include_str!("../assets/briefs/run.md"),
-        sha256: "bcf8020d89b3eaba175a89a0c35b74ff13af91fd1389f469e9e1b59e20878d8f",
+        sha256: "c7e7feb531bb6f42d77a590ffcfcfe8f178d7d72b26d6912c84acb82b9ee8fde",
     },
     Asset {
         rel_path: "schemas/sdd-schema.md",
         body: include_str!("../assets/schemas/sdd-schema.md"),
-        sha256: "f891d6523b0944a4ea7dd0632b10b7dda3113054582d64334e0a381ccb078507",
+        sha256: "42b646ecefef5ab926dc5e141cf260a743f0990773b7ba509d43a3b0b645de49",
     },
     Asset {
         rel_path: "schemas/tdd-schema.md",
@@ -91,7 +91,7 @@ pub const ASSETS: &[Asset] = &[
     Asset {
         rel_path: "templates/sdd-template-bundle/sdd.md",
         body: include_str!("../assets/templates/sdd-template-bundle/sdd.md"),
-        sha256: "3ed9c3457b602e1e856c9b42716db29291868cb47499fde132c70680a20e490b",
+        sha256: "fbe153d1d89f6db28d166e5b5e4bb044a9db1731077863be1d5405537c95e4e8",
     },
     Asset {
         rel_path: "templates/sdd-template-bundle/units/U-001-foundation.md",
@@ -101,7 +101,7 @@ pub const ASSETS: &[Asset] = &[
     Asset {
         rel_path: "templates/sdd-template-single.md",
         body: include_str!("../assets/templates/sdd-template-single.md"),
-        sha256: "59f6ec561c63f4b023839d2b4062008b7132359909071436e5115a5861f57ee1",
+        sha256: "a3034ca9d3904b47d443bc6606f81de24a1ba824e9e143c8e1bf4a2e8a3196e0",
     },
     Asset {
         rel_path: "templates/tdd-template.md",
@@ -115,7 +115,7 @@ pub const ASSETS: &[Asset] = &[
 pub const CONFIG: Asset = Asset {
     rel_path: "config.toml",
     body: include_str!("../assets/config.toml"),
-    sha256: "380c6ceb201764376afbae47d4ab2b83051e024217341454b12255c62295e8b2",
+    sha256: "00bdb50116970512cf75a1a16436e55c3bfe30b75e2ed43a5a7d534a05938c31",
 };
 
 /// Enumerate the complete embedded set.

@@ -1,12 +1,22 @@
 //! One look at a run: its record, the gate board, and a probe of each
 //! worker that is still running. Prints nothing; `render` shows it and
 //! `follow` compares one look with the next.
+//!
+//! The job's own records (`run.json`, `project.json`, `events.jsonl`) are
+//! in `.vitrify/logs/<job>/`; each lane's — its gate board, its workers'
+//! logs — in `.vitrify/logs/<job>/<slug>/`, the lanes being listed in
+//! `project.json`. Two shapes of that file are read: lanes with their SDD
+//! and state alone, and the project record's, whose lanes also carry their
+//! root and the plan's counts. A job recorded before lanes existed has no
+//! `project.json`; its one lane is the job itself.
 
+use std::collections::BTreeSet;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
+use vitrify_core::graph::{Node, UnitGraph, slug_of};
 use vitrify_core::model::{Instance, UtcTime};
 use vitrify_core::{CoreError, ledger};
 
@@ -77,6 +87,9 @@ pub struct WorkerView {
     pub pid: u32,
     pub retry: bool,
     pub worktree: String,
+    /// The slug of the lane the attempt belongs to; empty in a job
+    /// recorded before lanes existed.
+    pub lane: String,
     pub started_at: String,
     pub ended_at: Option<String>,
     pub outcome: String,
@@ -109,6 +122,30 @@ impl WorkerView {
     }
 }
 
+/// One lane as the look found it: its recorded state, how far it has got,
+/// and, when it is idle or blocked, the units elsewhere it waits on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaneView {
+    /// Names the lane's records directory.
+    pub slug: String,
+    /// The SDD's path from the repository root.
+    pub root: String,
+    /// As the run recorded it: `idle`, `build`, `recheck`, `up to date`,
+    /// `complete` or `blocked`.
+    pub state: String,
+    /// `None` when neither the SDD nor the record gave the counts.
+    pub verified: Option<u64>,
+    /// Non-Retired units.
+    pub total: Option<u64>,
+    /// Attempts running or waiting for the gate.
+    pub in_flight: u64,
+    /// Units neither Verified nor in flight.
+    pub waiting: Option<u64>,
+    /// `<slug> <unit>` of the other lanes' units that hold this lane's
+    /// units back, sorted. Only an idle or blocked lane has any.
+    pub waits_on: Vec<String>,
+}
+
 /// One look at a run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
@@ -128,6 +165,9 @@ pub struct Snapshot {
     pub params: Params,
     /// In `run.json` order.
     pub workers: Vec<WorkerView>,
+    /// Every lane, in `project.json` order; one for a job recorded before
+    /// lanes existed.
+    pub lanes: Vec<LaneView>,
     /// Only while the run is alive.
     pub gate: Option<GateView>,
     pub warnings: Vec<String>,
@@ -189,11 +229,17 @@ pub fn take(root: &Path, job: &str, now: UtcTime, quiet_after: u64) -> Result<Sn
         lease_minutes: p["lease_minutes"].as_i64().unwrap_or(0),
         worker_timeout_minutes: p["worker_timeout_minutes"].as_i64().unwrap_or(0),
     };
+    let lanes = lane_dirs(&logs_dir);
     let gate = if state == RunState::Alive {
-        std::fs::read_to_string(logs_dir.join("gate.json"))
-            .ok()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .and_then(|g| parse_gate(&g))
+        // the board of a lane that is gating, else the first lane's
+        let boards: Vec<GateView> = lanes
+            .iter()
+            .filter_map(|(_, dir)| std::fs::read_to_string(dir.join("gate.json")).ok())
+            .filter_map(|t| serde_json::from_str::<Value>(&t).ok())
+            .filter_map(|g| parse_gate(&g))
+            .collect();
+        let busy = boards.iter().position(|g| g.step != "idle").unwrap_or(0);
+        boards.into_iter().nth(busy)
     } else {
         None
     };
@@ -207,6 +253,7 @@ pub fn take(root: &Path, job: &str, now: UtcTime, quiet_after: u64) -> Result<Sn
             pid: as_u32(&w["pid"]),
             retry: w["retry"].as_bool().unwrap_or(false),
             worktree: str_of(&w["worktree"]),
+            lane: str_of(&w["lane"]),
             started_at: str_of(&w["started_at"]),
             ended_at: w["ended_at"].as_str().map(str::to_string),
             outcome: str_of(&w["outcome"]),
@@ -223,12 +270,21 @@ pub fn take(root: &Path, job: &str, now: UtcTime, quiet_after: u64) -> Result<Sn
             error: None,
         };
         if view.outcome == "running" {
-            probe(&mut view, &logs_dir, &sdd, now);
+            // its lane's records; a worker that names no lane is the
+            // first lane's
+            let lane = w["lane"].as_str();
+            let dir = lanes
+                .iter()
+                .find(|(slug, _)| Some(slug.as_str()) == lane)
+                .or(lanes.first())
+                .map_or(logs_dir.as_path(), |(_, dir)| dir.as_path());
+            probe(&mut view, dir, &sdd, now);
         }
         view.stage = stage(&view, state, gate.as_ref());
         workers.push(view);
     }
 
+    let lane_views = lane_views(root, &logs_dir, &sdd, terminated.as_ref(), &workers);
     let mut snap = Snapshot {
         job_id: v["job_id"].as_str().unwrap_or(job).to_string(),
         pid,
@@ -242,12 +298,185 @@ pub fn take(root: &Path, job: &str, now: UtcTime, quiet_after: u64) -> Result<Sn
         progress,
         params,
         workers,
+        lanes: lane_views,
         gate,
         warnings: Vec::new(),
         logs: format!(".vitrify/logs/{job}/"),
     };
     snap.warnings = warnings(&snap, quiet_after);
     Ok(snap)
+}
+
+/// One lane as `project.json` lists it.
+struct LaneRecord {
+    slug: String,
+    /// The `root` of the project record's lanes, else the `sdd` of the
+    /// minimal shape.
+    root: String,
+    state: String,
+    /// The plan's counts: only the project record's lanes carry them.
+    units: Option<u64>,
+    verified: Option<u64>,
+}
+
+/// The lanes of `project.json`; `None` when the job has no such file (it
+/// was recorded before lanes existed) or it cannot be read.
+fn project_lanes(logs_dir: &Path) -> Option<Vec<LaneRecord>> {
+    let project = fs_err::read_to_string(logs_dir.join("project.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())?;
+    let lanes = project["lanes"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|l| {
+            let slug = l["slug"].as_str()?;
+            // a name, never a path out of the job's directory
+            if slug.is_empty() || slug.contains('/') || slug == ".." {
+                return None;
+            }
+            let root = l["root"].as_str().or(l["sdd"].as_str());
+            Some(LaneRecord {
+                slug: slug.to_string(),
+                root: root.unwrap_or_default().to_string(),
+                state: str_of(&l["state"]),
+                units: l["units"].as_u64(),
+                verified: l["verified"].as_u64(),
+            })
+        })
+        .collect();
+    Some(lanes)
+}
+
+/// Each lane of the job whose records are in `logs_dir`, with the
+/// directory of its records, in `project.json` order. A job recorded
+/// before runs had lanes keeps them in its own directory.
+pub fn lane_dirs(logs_dir: &Path) -> Vec<(String, PathBuf)> {
+    match project_lanes(logs_dir) {
+        Some(lanes) => lanes
+            .into_iter()
+            .map(|l| {
+                let dir = logs_dir.join(&l.slug);
+                (l.slug, dir)
+            })
+            .collect(),
+        None => vec![(String::new(), logs_dir.to_path_buf())],
+    }
+}
+
+/// An SDD of the primary checkout, if it can be read.
+fn load_sdd(root: &Path, rel: &str) -> Option<Instance> {
+    if rel.is_empty() {
+        return None;
+    }
+    cmd::resolve_sdd_in(root, Path::new(rel))
+        .and_then(Instance::load)
+        .ok()
+}
+
+/// Every lane of the job: what `project.json` records of it, the progress
+/// of its SDD in the primary checkout, the attempts it has in flight, and,
+/// for an idle or blocked lane, what it waits on. A job recorded before
+/// lanes existed has the one lane its `run.json` names, in the state its
+/// end gives it.
+fn lane_views(
+    root: &Path,
+    logs_dir: &Path,
+    sdd: &str,
+    terminated: Option<&Terminated>,
+    workers: &[WorkerView],
+) -> Vec<LaneView> {
+    let records = project_lanes(logs_dir).unwrap_or_else(|| {
+        let state = match terminated.map(|t| t.state.as_str()) {
+            None => "build",
+            Some("complete") => "complete",
+            Some(_) => "blocked",
+        };
+        vec![LaneRecord {
+            slug: String::new(),
+            root: sdd.to_string(),
+            state: state.to_string(),
+            units: None,
+            verified: None,
+        }]
+    });
+    let insts: Vec<Option<Instance>> = records.iter().map(|r| load_sdd(root, &r.root)).collect();
+    let graph = if records
+        .iter()
+        .any(|r| r.state == "idle" || r.state == "blocked")
+    {
+        let loaded: Vec<Instance> = insts.iter().flatten().cloned().collect();
+        UnitGraph::build(&loaded).ok()
+    } else {
+        None
+    };
+
+    records
+        .iter()
+        .zip(&insts)
+        .enumerate()
+        .map(|(i, (rec, inst))| {
+            // an attempt that names no lane is the first lane's
+            let in_flight = workers
+                .iter()
+                .filter(|w| w.outcome == "running" || w.outcome == "integrating")
+                .filter(|w| {
+                    w.lane == rec.slug || (i == 0 && !records.iter().any(|r| r.slug == w.lane))
+                })
+                .count() as u64;
+            let counts = match inst {
+                Some(inst) => {
+                    let live: Vec<&str> = inst
+                        .units
+                        .iter()
+                        .map(|u| u.meta.get_str_or("status", "Draft"))
+                        .filter(|s| *s != "Retired")
+                        .collect();
+                    let verified = live.iter().filter(|s| **s == "Verified").count();
+                    Some((verified as u64, live.len() as u64))
+                }
+                None => rec.verified.zip(rec.units),
+            };
+            // a job recorded before lanes existed names no slug: its SDD's
+            let slug = match inst {
+                Some(inst) if rec.slug.is_empty() => slug_of(inst).to_string(),
+                _ => rec.slug.clone(),
+            };
+            let waits_on = match (&graph, rec.state.as_str()) {
+                (Some(g), "idle" | "blocked") => waits_on_of(g, &slug),
+                _ => Vec::new(),
+            };
+            LaneView {
+                slug,
+                root: rec.root.clone(),
+                state: rec.state.clone(),
+                verified: counts.map(|c| c.0),
+                total: counts.map(|c| c.1),
+                in_flight,
+                waiting: counts.map(|(v, t)| t.saturating_sub(v).saturating_sub(in_flight)),
+                waits_on,
+            }
+        })
+        .collect()
+}
+
+/// The units of other lanes that hold back the unfinished units of lane
+/// `slug`: those not yet Built, since a Built unit holds nothing back.
+/// Sorted.
+fn waits_on_of(graph: &UnitGraph, slug: &str) -> Vec<String> {
+    let done = |n: &Node| matches!(graph.status(n), Some("Verified" | "Retired"));
+    let released = |n: &Node| done(n) || graph.status(n) == Some("Built");
+    let mut out: BTreeSet<&Node> = BTreeSet::new();
+    for n in graph.nodes().iter().filter(|n| n.slug == slug && !done(n)) {
+        out.extend(
+            graph
+                .dependencies(n)
+                .into_iter()
+                .filter(|d| d.slug != slug && !released(d)),
+        );
+    }
+    out.into_iter().map(Node::to_string).collect()
 }
 
 /// A string field, `""` when absent or not a string.
@@ -499,6 +728,7 @@ pub(crate) mod tests {
             pid: 4242,
             retry: false,
             worktree: "/tmp/wt".to_string(),
+            lane: String::new(),
             started_at: "2026-11-16T14:00:00Z".to_string(),
             ended_at: None,
             outcome: outcome.to_string(),
@@ -580,6 +810,62 @@ pub(crate) mod tests {
         assert_eq!(count_lines(&file("d.bin", b"PK\x03\x04\0\0\nmore\n")), 0);
         assert_eq!(count_lines(&dir.join("missing")), 0);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn lane_records_are_found_through_project_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path();
+        // a job from before lanes: its records are its own directory
+        assert_eq!(lane_dirs(logs), vec![(String::new(), logs.to_path_buf())]);
+        std::fs::write(
+            logs.join("project.json"),
+            r#"{"job_id": "run-x", "lanes": [
+                {"sdd": "specs/a", "slug": "a", "state": "build"},
+                {"sdd": "specs/b", "slug": "../b", "state": "build"},
+                {"sdd": "specs/c", "slug": "c", "state": "complete"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            lane_dirs(logs),
+            vec![
+                ("a".to_string(), logs.join("a")),
+                ("c".to_string(), logs.join("c"))
+            ]
+        );
+    }
+
+    #[test]
+    fn both_shapes_of_project_json_name_a_root_and_a_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path();
+        assert!(project_lanes(logs).is_none());
+        // the minimal shape: the SDD's path is the root, there are no counts
+        std::fs::write(
+            logs.join("project.json"),
+            r#"{"job_id": "run-x", "lanes": [{"sdd": "specs/a", "slug": "a", "state": "idle"}]}"#,
+        )
+        .unwrap();
+        let lanes = project_lanes(logs).unwrap();
+        assert_eq!(
+            (lanes[0].root.as_str(), lanes[0].state.as_str()),
+            ("specs/a", "idle")
+        );
+        assert_eq!((lanes[0].units, lanes[0].verified), (None, None));
+        // the project record's: a root, and the plan's counts
+        std::fs::write(
+            logs.join("project.json"),
+            r#"{"job_id": "run-x", "lanes": [{"slug": "a", "root": "specs/a",
+                "state": "up to date", "units": 4, "verified": 4, "regenerate": 0,
+                "adopt": 0, "recheck": 0}], "critical_path": []}"#,
+        )
+        .unwrap();
+        let lanes = project_lanes(logs).unwrap();
+        assert_eq!(
+            (lanes[0].root.as_str(), lanes[0].state.as_str()),
+            ("specs/a", "up to date")
+        );
+        assert_eq!((lanes[0].units, lanes[0].verified), (Some(4), Some(4)));
     }
 
     #[test]

@@ -39,10 +39,10 @@ These pages install vitrify and prove it works.
 These guides take you through each task, step by step. Each opens with the prompts that hand the task to your coding agent.
 
 - [Author a Spec](user-guides/author-a-spec.md) covers turning a PRD into the TDD and SDD, choosing a test posture, and passing lint.
-- [Run a Build](user-guides/run-a-build.md) covers starting a build, building interactively, resolving a Blocked result, and resuming; `vitrify brief run` is the agent's procedure.
-- [Monitor a Run](user-guides/monitor-a-run.md) covers everything a run prints and records, how to read it while it works, and the final report it keeps.
+- [Run a Build](user-guides/run-a-build.md) covers starting a build or a project run of several SDDs, planning it with a dry run, building interactively, resolving a Blocked result, and resuming; `vitrify brief run` is the agent's procedure.
+- [Monitor a Run](user-guides/monitor-a-run.md) covers everything a run prints and records, how to read it while it works, the lanes and event log of a project run, a rotten unit and its culprit, and the final report it keeps.
 - [Change a Spec](user-guides/change-a-spec.md) covers change entries, `vitrify change apply`, `vitrify check`, and rebuilding only what a change reaches; `vitrify brief change` is the agent's procedure.
-- [Work With Several SDDs](user-guides/multiple-sdds.md) covers repositories with several SDDs, and the pins and transcriptions between them.
+- [Work With Several SDDs](user-guides/multiple-sdds.md) covers repositories with several SDDs: the pins and transcriptions between them, what a unit declares in `depends_on`, migrating to schema 2.1, what a repository provides, sizing the pools, and building them all with one `vitrify run`.
 
 ## CLI
 
