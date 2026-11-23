@@ -2557,16 +2557,38 @@ fn a_single_file_sdd_builds_through_its_pin() {
 /// built, and interrupt it: both attempts are built and never landed. The
 /// row passes at once from then on.
 fn interrupt_after_built(r: &Rig) {
+    // Both units' rows wait, so whichever gate starts first holds the lane
+    // and the other unit, built meanwhile, waits behind it: a lone U-002
+    // must not integrate before U-001 is built.
+    // (no `|` in a row: it would end the table cell)
+    const HOLD: &str = "if [ ! -e ../release ]; then touch ../gate-started; sleep 60; fi; ";
     edit(
         r,
         "specs/mini/units/U-001-one.md",
         "`test -f src/one.txt`",
-        // (no `|` in a row: it would end the table cell)
-        "`sh -c 'if [ ! -e ../release ]; then touch ../gate-started; sleep 60; fi; test -f src/one.txt'`",
+        &format!("`sh -c '{HOLD}test -f src/one.txt'`"),
     );
-    git(&r.root, &["commit", "-q", "-am", "a row that waits once"]);
+    let two = "specs/mini/units/U-002-two.md";
+    let text = std::fs::read_to_string(r.root.join(two)).unwrap();
+    if text.contains("`test -f src/two.txt`") {
+        edit(
+            r,
+            two,
+            "`test -f src/two.txt`",
+            &format!("`sh -c '{HOLD}test -f src/two.txt'`"),
+        );
+    } else {
+        // a row already wrapped in `sh -c '…'` holds before its last check
+        edit(
+            r,
+            two,
+            "test -f src/two.txt'`",
+            &format!("{HOLD}test -f src/two.txt'`"),
+        );
+    }
+    git(&r.root, &["commit", "-q", "-am", "rows that wait once"]);
     let bg = r.start(&["run", "--cap", "2"], &[]);
-    wait_for("both units built, U-001 in its gate", || {
+    wait_for("both units built, one in its gate", || {
         let built = |u: &str| {
             r.run_json()["workers"].as_array().is_some_and(|ws| {
                 ws.iter()
