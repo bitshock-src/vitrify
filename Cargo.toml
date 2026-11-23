@@ -5,7 +5,7 @@ resolver = "3"
 [workspace.package]
 # vitrify-core and vitrify-cli are released together, at one version: bump it
 # here and in the `vitrify-core` requirement below in the same change.
-version = "0.8.0-rc.1"
+version = "0.8.0"
 edition = "2024"
 # the oldest rustc that builds the published crates (File::lock is 1.89);
 # CI's msrv job holds it. Development uses rust-toolchain.toml's pin.
@@ -16,7 +16,7 @@ repository = "https://github.com/bitshock-src/vitrify"
 [workspace.dependencies]
 # exact: vitrify-core is vitrify-cli's internal library, with no API held
 # across releases, so each vitrify-cli release builds against its own
-vitrify-core = { path = "crates/vitrify-core", version = "=0.8.0-rc.1" }
+vitrify-core = { path = "crates/vitrify-core", version = "=0.8.0" }
 clap = { version = "4.6", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

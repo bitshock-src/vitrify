@@ -9,7 +9,7 @@
 ## Synopsis
 
 ```sh
-cargo install vitrify-cli --version 0.7.0 --locked   # Rust 1.89 or later; installs `vitrify`
+cargo install vitrify-cli --version 0.8.0 --locked   # Rust 1.89 or later; installs `vitrify`
 vitrify init                                         # once per machine: settings and harness probe
 vitrify run --dry-run                                # preflight and the plan; publishes nothing
 vitrify run                                          # builds every Active SDD: Complete. or Blocked.
