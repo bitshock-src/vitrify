@@ -2,7 +2,8 @@
 //! and histories the dirty set equals what hashing each unit's input paths
 //! at its anchor and at the head says, plus the named cases (protocol-only
 //! commit, foundation change, early cutoff, outside change, spec change,
-//! reasons) and the journal marks the cascade stores its anchors in.
+//! reasons, test paths) and the journal marks the cascade stores its anchors
+//! in.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -77,6 +78,11 @@ fn world(rng: &mut Rng) -> World {
             scope_roots: vec![format!("src/{slug}/")],
             ..Default::default()
         };
+        // a §6 `tests:` list, or none (an SDD below 2.2 reads it as none)
+        let tests = rng.chance(1, 2);
+        if tests {
+            sdd.tests = vec![format!("src/{slug}/t/")];
+        }
         // spec files: a bundle directory or a single file
         if rng.chance(1, 2) {
             sdd.spec_paths = vec![format!("specs/{slug}")];
@@ -93,13 +99,27 @@ fn world(rng: &mut Rng) -> World {
             let files: Vec<String> = (0..1 + rng.below(3))
                 .map(|i| format!("{dir}/f{i}.rs"))
                 .collect();
-            let owns = match rng.below(3) {
+            let mut owns = match rng.below(3) {
                 0 => vec![format!("{dir}/")],
                 1 => files.clone(),
                 _ => vec![format!("{dir}/*.rs")],
             };
             for f in &files {
                 expected.insert(f.clone(), Owner::Unit(n(&slug, &unit)));
+            }
+            // a test file the unit owns: generated when the SDD lists it
+            if rng.chance(1, 2) {
+                let t = format!("src/{slug}/t/{unit}.rs");
+                let owner = if tests {
+                    Owner::Test {
+                        slug: slug.clone(),
+                        unit: Some(n(&slug, &unit)),
+                    }
+                } else {
+                    Owner::Unit(n(&slug, &unit))
+                };
+                expected.insert(t.clone(), owner);
+                owns.push(t);
             }
             // a file no glob of the unit covers, when the style leaves one
             if owns[0].ends_with("*.rs") {
@@ -108,6 +128,18 @@ fn world(rng: &mut Rng) -> World {
             sdd.units.push((unit.clone(), owns));
             nodes.push(n(&slug, &unit));
         }
+        // a test file no unit owns: pre-existing when the SDD lists it
+        expected.insert(
+            format!("src/{slug}/t/pre.txt"),
+            if tests {
+                Owner::Test {
+                    slug: slug.clone(),
+                    unit: None,
+                }
+            } else {
+                Owner::Unmanaged(slug.clone())
+            },
+        );
         // under the scope, owned by no one, and listed unmanaged
         expected.insert(
             format!("src/{slug}/misc/orphan.txt"),
@@ -192,6 +224,16 @@ fn inputs_of(w: &World, units: &[&Node], slug: &str) -> BTreeSet<String> {
         .filter(|(p, o)| match o {
             Owner::Spec(_) => false,
             Owner::Unit(node) => relevant.contains(node),
+            // a test path reaches its own SDD only: a generated one the
+            // units whose closure holds its owner, a pre-existing one all
+            Owner::Test {
+                slug: s,
+                unit: Some(node),
+            } => s == slug && relevant.contains(node),
+            Owner::Test {
+                slug: s,
+                unit: None,
+            } => s == slug,
             Owner::Unmanaged(s) => s == slug,
             Owner::Outside => outside_ok(p),
         })
@@ -629,6 +671,80 @@ fn shared_inputs_come_from_front_matter() {
     );
     assert_eq!(own.classify("src/a.rs"), Owner::Unmanaged("x".into()));
     assert_eq!(own.classify("tools/a.sh"), Owner::Outside);
+}
+
+#[test]
+fn tests_come_from_section_6_at_2_2() {
+    let tmp = tempfile::tempdir().unwrap();
+    // x declares 2.2 and lists its tests inside a fence; y declares 2.1, so
+    // its unfenced list is not read
+    let sdds = [
+        ("x", "2.2", "```\ntests:\n  - src/x/t/\n```\n"),
+        ("y", "2.1", "tests:\n  - src/y/t/\n"),
+    ];
+    for (slug, schema, list) in sdds {
+        let dir = tmp.path().join(format!("specs/{slug}"));
+        std::fs::create_dir_all(dir.join("units")).unwrap();
+        std::fs::write(
+            dir.join("sdd.md"),
+            format!(
+                "---\nsdd: {slug}\nschema_version: {schema}\nversion: 0.1.0\nstatus: Active\n\
+                 scope_roots:\n  - src/{slug}/\n---\n\n# {slug}\n\n\
+                 ## System Layout & Ownership\n\n{list}\n## Next\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("units/U-001.md"),
+            format!(
+                "---\nunit: U-001\nstatus: Ready\nclaimed_by: —\nclaim_expires: —\n\
+                 depends_on: []\nowns:\n  - src/{slug}/a.rs\n  - src/{slug}/t/own.rs\n\
+                 consumes: []\n---\n\n# U-001\n"
+            ),
+        )
+        .unwrap();
+    }
+    let insts: Vec<Instance> = vitrify_core::model::discover(tmp.path())
+        .into_iter()
+        .map(|h| Instance::load(h).unwrap())
+        .collect();
+    assert_eq!(insts.len(), 2);
+    let own = Ownership::build(
+        tmp.path(),
+        insts.iter().map(|i| (i.meta.get_str_or("sdd", "?"), i)),
+    )
+    .unwrap();
+    assert_eq!(
+        own.classify("src/x/t/own.rs"),
+        Owner::Test {
+            slug: "x".into(),
+            unit: Some(n("x", "U-001")),
+        }
+    );
+    assert_eq!(
+        own.classify("src/x/t/pre.rs"),
+        Owner::Test {
+            slug: "x".into(),
+            unit: None,
+        }
+    );
+    assert_eq!(own.classify("src/x/a.rs"), Owner::Unit(n("x", "U-001")));
+    assert_eq!(own.classify("src/y/t/own.rs"), Owner::Unit(n("y", "U-001")));
+    assert_eq!(own.classify("src/y/t/pre.rs"), Owner::Unmanaged("y".into()));
+}
+
+#[test]
+fn owners_describe_their_posture() {
+    let generated = Owner::Test {
+        slug: "a".into(),
+        unit: Some(n("a", "U-001")),
+    };
+    assert_eq!(generated.describe(), "test of unit a U-001");
+    let pre = Owner::Test {
+        slug: "a".into(),
+        unit: None,
+    };
+    assert_eq!(pre.describe(), "pre-existing test of a");
 }
 
 fn event(seq: i64, kind: &str, unit: Option<&str>, actor: Option<&str>, commit: &str) -> Event {

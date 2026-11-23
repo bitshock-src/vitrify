@@ -1,6 +1,8 @@
 //! Culprit finding against temp repositories with a real git history: a
 //! seeded culprit among three upstream commits is named — also when it
-//! reached the unit through a path outside its declared inputs; a flaky row
+//! reached the unit through a path outside its declared inputs; a test edit
+//! in another SDD is not a likely culprit, and a generated test's owner is
+//! named as the unit it changed; a flaky row
 //! is concluded a flake; the probe checkout is left pristine; a probe whose
 //! Build fails counts as a failure of the row; the base check of the no new
 //! failures rule tells a rotten row from one the batch broke.
@@ -61,6 +63,7 @@ fn ownership() -> Ownership {
             spec_paths: vec!["specs/core".into()],
             scope_roots: vec!["src/core/".into()],
             unmanaged: vec![],
+            tests: Vec::new(),
             units: vec![
                 ("U-001".into(), vec!["src/core/a.txt".into()]),
                 ("U-002".into(), vec!["src/core/b.txt".into()]),
@@ -72,10 +75,45 @@ fn ownership() -> Ownership {
             spec_paths: vec!["specs/api".into()],
             scope_roots: vec!["src/api/".into()],
             unmanaged: vec![],
+            tests: Vec::new(),
             units: vec![("U-001".into(), vec!["src/api/x.txt".into()])],
             shared_inputs: Some(vec![]),
         },
     ])
+}
+
+/// [`ownership`], with core listing `src/core/t/` under `tests:` and
+/// core U-001 owning the generated test `src/core/t/a_test.txt`; without
+/// `tests`, the same file is plainly U-001's.
+fn ownership_with_test(listed: bool) -> Ownership {
+    let mut core = SddOwnership {
+        slug: "core".into(),
+        spec_paths: vec!["specs/core".into()],
+        scope_roots: vec!["src/core/".into()],
+        unmanaged: vec![],
+        tests: Vec::new(),
+        units: vec![
+            (
+                "U-001".into(),
+                vec!["src/core/a.txt".into(), "src/core/t/a_test.txt".into()],
+            ),
+            ("U-002".into(), vec!["src/core/b.txt".into()]),
+        ],
+        shared_inputs: None,
+    };
+    if listed {
+        core.tests = vec!["src/core/t/".into()];
+    }
+    let api = SddOwnership {
+        slug: "api".into(),
+        spec_paths: vec!["specs/api".into()],
+        scope_roots: vec!["src/api/".into()],
+        unmanaged: vec![],
+        tests: Vec::new(),
+        units: vec![("U-001".into(), vec!["src/api/x.txt".into()])],
+        shared_inputs: Some(vec![]),
+    };
+    Ownership::new(vec![core, api])
 }
 
 fn api() -> Node {
@@ -196,9 +234,20 @@ impl Repo {
         setup: &[String],
         runner: &dyn blame::Runner,
     ) -> culprit::Report {
+        self.find_with(&ownership(), anchor, row, setup, runner)
+    }
+
+    /// [`Repo::find`] under the ownership `own`.
+    fn find_with(
+        &self,
+        own: &Ownership,
+        anchor: &str,
+        row: &str,
+        setup: &[String],
+        runner: &dyn blame::Runner,
+    ) -> culprit::Report {
         let primary = Git::new(&self.root);
         let prepare = PristineCheckout::new(primary.clone(), &self.probe);
-        let own = ownership();
         let cl = closures();
         let node = api();
         let base = self.head();
@@ -212,7 +261,7 @@ impl Repo {
             },
             &Probe {
                 git: &primary,
-                ownership: &own,
+                ownership: own,
                 closures: &cl,
                 setup,
                 prepare: &prepare,
@@ -275,6 +324,47 @@ fn a_seeded_culprit_among_three_upstream_commits_is_named() {
         )
     );
     assert!(r.probe_is_pristine_at(&r.head()), "probe left dirty");
+}
+
+#[test]
+fn a_test_edit_in_another_sdd_is_not_a_likely_culprit() {
+    let (r, anchor) = repo();
+    // three upstream commits: one changes only core U-001's generated test,
+    // the next breaks its code, the last is docs
+    r.commit(
+        &[("src/core/t/a_test.txt", "asserts more\n")],
+        "test: core U-001 asserts more",
+    );
+    let culprit = r.integrate("U-001", &[("src/core/a.txt", "bad\n")]);
+    r.commit(&[("docs/notes.md", "notes\n")], "docs: notes");
+    let row = "grep -qx good src/core/a.txt";
+    let report = r.find_with(&ownership_with_test(true), &anchor, row, &[], &sh);
+    let Finding::Culprit(c) = &report.finding else {
+        panic!("expected a culprit, got {report:?}");
+    };
+    assert_eq!(c.sha, culprit);
+    assert_eq!(c.upstream, vec![Node::new("core", "U-001")]);
+    assert_eq!(report.candidates, 4);
+    // the test edit does not reach api U-001: only the code change counts
+    assert_eq!(report.touched, 1);
+    // unlisted, the same file is plain U-001 code, and both commits count
+    let report = r.find_with(&ownership_with_test(false), &anchor, row, &[], &sh);
+    assert_eq!(report.touched, 2);
+    assert!(r.probe_is_pristine_at(&r.head()));
+
+    // a test edit that does break the row is named, its owner the unit it
+    // changed
+    let (r, anchor) = repo();
+    let culprit = r.integrate("U-001", &[("src/core/t/a_test.txt", "bad\n")]);
+    r.commit(&[("docs/notes.md", "notes\n")], "docs: notes");
+    let row = "! grep -qx bad src/core/t/a_test.txt";
+    let report = r.find_with(&ownership_with_test(true), &anchor, row, &[], &sh);
+    assert_eq!(report.touched, 0);
+    let Finding::Culprit(c) = &report.finding else {
+        panic!("expected a culprit, got {report:?}");
+    };
+    assert_eq!(c.sha, culprit);
+    assert_eq!(c.upstream, vec![Node::new("core", "U-001")]);
 }
 
 #[test]

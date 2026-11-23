@@ -101,7 +101,7 @@ Follow these steps for every bump:
 To retire a unit, set its status to `Retired` and say in the change entry which artifacts are deleted; the deletion is executed at integration of that entry.
 
 > [!IMPORTANT]
-> A Stale unit is rebuilt by an implementer, who may rewrite everything it owns. If the change stales an authored baseline — tests only you should write — update and re-stamp that unit yourself before the next build, as in [Ship an Authored Baseline](author-a-spec.md#ship-an-authored-baseline).
+> A Stale unit is rebuilt by an implementer, who may rewrite everything it owns, generated tests included. Pre-existing tests are never rewritten: update them yourself in the change that needs it.
 
 ## Change a Contract Other SDDs Use
 
@@ -125,6 +125,28 @@ An SDD whose units consume pins moves to schema 2.1 so that a project run knows 
 5. Run `vitrify change apply --sdd <root>`, then `vitrify check --sdd <root>`, and commit once.
 
 Use PATCH and not MINOR. `depends_on` is part of each unit's own entry, so the edit moves each edited unit's trace; a PATCH entry makes `vitrify change apply` re-record those traces and keep every status and stamp, where a MINOR or MAJOR entry would mark the units Stale and have the next run rebuild code that is already correct. A pin in `depends_on` under `schema_version: 2.0` is a lint L1 finding, so set the version in the same commit. `vitrify locate --graph` then shows the edges you declared. If a pin you added closes a cycle, lint L12 and the run's preflight print it as the path that closes it; see [A Project Run Refuses a Cycle](../resources/troubleshooting.md#a-project-run-refuses-a-cycle).
+
+## Migrate an SDD to Schema 2.2
+
+Schema 2.2 lets an SDD list its tests, so a change to one re-checks only
+its own SDD, and lets tests that only you may write be owned by no unit.
+Migrating is one PATCH change entry:
+
+1. List the SDD's test files under `tests:` in §6 System Layout & Ownership.
+2. For tests only you should write — an authored baseline's, or tests kept
+   outside `scope_roots` — move them under `scope_roots` if they lie outside,
+   and remove them from their unit's `owns`.
+3. Set `schema_version: 2.2` in the core front matter.
+4. Write one PATCH change entry that says so, with `Staleness applied: —`, and
+   set `version` and `updated` to match it.
+5. Run `vitrify change apply --sdd <root>`, then `vitrify check --sdd <root>`,
+   and commit once.
+
+Use PATCH and not MINOR. Neither §6 nor the front matter is a trace input,
+so the list and the version stale nothing; a unit whose `owns` you edited in
+step 2 has its trace re-recorded by `vitrify change apply`, keeping its
+status and stamps. A `tests:` list in an SDD below 2.2 is a lint L2 finding,
+so set the version in the same commit.
 
 ## Change the Spec During a Run
 

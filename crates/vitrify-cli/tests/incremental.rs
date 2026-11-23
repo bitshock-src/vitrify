@@ -5,11 +5,15 @@
 //! distrust-everything mode, a cycle), and re-check batches (passing units
 //! recorded as `verified`/`recheck` with fresh stamps, the suite recorded,
 //! replay and audit clean, nothing dirty afterwards; a failing row records
-//! nothing for its unit).
+//! nothing for its unit), and test paths (§6 `tests:`, schema 2.2): a test
+//! change re-checks its own SDD only, a pre-existing test reaches its whole
+//! SDD, code still reaches across SDDs, a 2.1 SDD reads its list as before,
+//! `vitrify check` names a test's owner, and adding a list stales nothing.
 
 mod common;
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use common::{Project, git};
 use vitrify_cli::git::Git;
@@ -526,4 +530,133 @@ fn a_diff_cache_carried_across_heads_finds_what_fresh_diffs_find() {
     p.write("b/two.txt", "b two, again\n");
     p.commit("leaf");
     assert_eq!(both(&mut cache), ["beta U-002"]);
+}
+
+// ------------------------------------------------------------ test paths
+
+/// Record a suite pass of both SDDs at the anchor, so a suite is dirty
+/// only on what changed since.
+fn suites_passed(p: &Project) {
+    for sdd in ["specs/alpha", "specs/beta"] {
+        p.suite_pass(sdd, &p.anchor);
+    }
+    p.commit("suites");
+}
+
+/// Every reason of every dirty unit, described.
+fn reasons(set: &DirtySet) -> Vec<String> {
+    set.units
+        .iter()
+        .flat_map(|d| match &d.why {
+            Why::Paths(reasons) => reasons.iter().map(|r| r.describe()).collect::<Vec<_>>(),
+            other => panic!("{:?}: {other:?}", d.node),
+        })
+        .collect()
+}
+
+#[test]
+fn a_test_change_stays_in_its_sdd() {
+    let p = Project::with_tests("2.2");
+    suites_passed(&p);
+    assert!(dirty_at(&p.root).units.is_empty());
+    p.write("a/tests/t1.txt", "t1, again\n");
+    p.commit("test");
+    let set = dirty_at(&p.root);
+    // its owner and the unit depending on it; never beta U-001, which
+    // depends on alpha U-001 through a pin
+    assert_eq!(names(&set), ["alpha U-001", "alpha U-002"]);
+    let why = reasons(&set);
+    assert_eq!(why.len(), 2);
+    assert!(
+        why.iter()
+            .all(|r| r == "a/tests/t1.txt (test of unit alpha U-001)"),
+        "{why:?}"
+    );
+    assert!(set.suite("alpha").unwrap().dirty.is_some());
+    assert_eq!(set.suite("beta").unwrap().dirty, None);
+}
+
+#[test]
+fn a_pre_existing_test_change_reaches_its_whole_sdd() {
+    let p = Project::with_tests("2.2");
+    p.write("a/tests/pre.txt", "pre, again\n");
+    p.commit("test");
+    let set = dirty_at(&p.root);
+    assert_eq!(names(&set), ["alpha U-001", "alpha U-002"]);
+    assert!(
+        reasons(&set)
+            .iter()
+            .all(|r| r == "a/tests/pre.txt (pre-existing test of alpha)"),
+        "{:?}",
+        reasons(&set)
+    );
+}
+
+#[test]
+fn code_still_reaches_across_sdds() {
+    let p = Project::with_tests("2.2");
+    p.write("a/one.txt", "one, again\n");
+    p.commit("code");
+    assert_eq!(
+        names(&dirty_at(&p.root)),
+        ["alpha U-001", "alpha U-002", "beta U-001"]
+    );
+}
+
+#[test]
+fn a_2_1_sdd_reads_its_tests_list_as_before() {
+    let p = Project::with_tests("2.1");
+    p.write("a/tests/t1.txt", "t1, again\n");
+    p.commit("test");
+    // below 2.2 the list is not read: the test is U-001's code
+    let set = dirty_at(&p.root);
+    assert!(names(&set).contains(&"beta U-001".to_string()), "{set:?}");
+    let out = Command::new(env!("CARGO_BIN_EXE_vitrify"))
+        .args(["lint", "--sdd", "specs/alpha"])
+        .current_dir(&p.root)
+        .env("VITRIFY_HOME", &p.home)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(
+            "§6 lists tests:, and this SDD declares schema_version 2.1 — a tests: list is schema 2.2"
+        ),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn check_names_a_test_owner() {
+    let p = Project::with_tests("2.2");
+    p.write("a/tests/t1.txt", "t1, again\n");
+    p.commit("test");
+    let (_, out, err) = p.vitrify(&["check", "--all"]);
+    assert!(
+        out.contains("dirty U-002: a/tests/t1.txt (test of unit alpha U-001)"),
+        "{out}{err}"
+    );
+    // the pre-existing test is governed: no orphan
+    let (ok, out, err) = p.vitrify(&["audit", "--sdd", "specs/alpha", "--skip-rotten"]);
+    assert!(ok, "{out}{err}");
+    assert!(!out.contains("a/tests/pre.txt"), "{out}{err}");
+    assert!(!err.contains("a/tests/pre.txt"), "{out}{err}");
+}
+
+#[test]
+fn adding_a_tests_list_stales_nothing() {
+    let p = Project::new();
+    let sdd = p.read("specs/alpha/sdd.md");
+    p.write(
+        "specs/alpha/sdd.md",
+        &sdd.replace("schema_version: 2.1", "schema_version: 2.2")
+            .replace("unmanaged: []", "tests:\n  - a/tests/\nunmanaged: []"),
+    );
+    p.commit("tests list");
+    for (sdd, unit) in common::UNITS {
+        let (ok, out, err) = p.vitrify(&["trace", "verify", "--unit", unit, "--sdd", sdd]);
+        assert!(ok, "trace verify {sdd} {unit}: {out}{err}");
+    }
+    assert!(dirty_at(&p.root).units.is_empty());
 }

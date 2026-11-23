@@ -16,6 +16,7 @@ fn bundle_ws(owns: &[&str]) -> WriteSet {
         owns: owns.iter().map(|g| g.to_string()).collect(),
         spec_file: "specs/x/units/U-001-one.md".into(),
         spec_paths: vec!["specs/x".into()],
+        tests: Vec::new(),
         shape: Shape::Bundle,
     }
 }
@@ -73,6 +74,7 @@ fn a_bundle_at_the_repo_root_protects_its_own_files_only() {
             .iter()
             .map(|p| p.to_string())
             .collect(),
+        tests: Vec::new(),
         shape: Shape::Bundle,
     };
     assert!(ws.covers("src/a.md"));
@@ -148,6 +150,7 @@ fn single_file_allows_only_the_units_own_handoff_fields() {
         owns: vec!["src/one.txt".into()],
         spec_file: "specs/solo.sdd.md".into(),
         spec_paths: vec!["specs/solo.sdd.md".into()],
+        tests: Vec::new(),
         shape: Shape::Single,
     };
     let own = SINGLE.replacen("status: Claimed", "status: Built", 1);
@@ -179,5 +182,32 @@ fn handoff_mask_is_the_masking_walk_over_fewer_keys() {
     assert_eq!(
         full,
         format!("---\n{}---\n{}", trace::mask_meta_block(block), body)
+    );
+}
+
+#[test]
+fn a_pre_existing_test_is_named_as_such() {
+    let ws = WriteSet {
+        unit: "U-001".into(),
+        owns: vec!["src/a.rs".into(), "tests/own.rs".into()],
+        spec_file: "specs/x/units/U-001-one.md".into(),
+        spec_paths: vec!["specs/x".into()],
+        tests: vec!["tests/".into()],
+        shape: Shape::Bundle,
+    };
+    let none = || (None, None);
+    let v = ws.violations(&["tests/pre.rs".to_string()], none);
+    assert_eq!(v, vec![Violation::PreExistingTest("tests/pre.rs".into())]);
+    assert_eq!(
+        v[0].describe("U-001"),
+        "tests/pre.rs: a pre-existing test (§6 tests:) — no unit's work may change it"
+    );
+    assert!(
+        ws.violations(&["tests/own.rs".to_string()], none)
+            .is_empty()
+    );
+    assert_eq!(
+        ws.violations(&["src/b.rs".to_string()], none),
+        vec![Violation::NotOwned("src/b.rs".into())]
     );
 }

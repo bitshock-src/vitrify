@@ -1,7 +1,8 @@
 //! The serial integrator on sh-only inline mini projects: green path lands
 //! evidence commits; superseded-token rejection; expired-lease skip; the
-//! write-set check (foreign paths, own spec text, unmanaged paths, the
-//! ownership rule behind every test posture, single-file regions); own-path
+//! write-set check (foreign paths, a pre-existing test, own spec text,
+//! unmanaged paths, the ownership rule behind every test posture,
+//! single-file regions); own-path
 //! conflict → escalation signal; red gate → clean revert; lost-race redo;
 //! the input check (built from the text mainline holds now); the Lint and
 //! Test commands in the gate; batches (one gate for several units, red ones
@@ -466,6 +467,38 @@ fn write_outside_owns_rejected_before_merge() {
     let ml = r.mainline();
     assert_eq!(git(&ml, &["rev-parse", "HEAD"]), head);
     assert!(git(&ml, &["status", "--porcelain"]).is_empty());
+}
+
+#[test]
+fn a_pre_existing_test_edit_is_rejected() {
+    // a 2.2 SDD lists its tests; one no unit owns is pre-existing, and no
+    // unit's work may change it
+    let sdd = sdd_with(&["src/", "tests/"], &[])
+        .replace("schema_version: 2.0", "schema_version: 2.2")
+        .replace("unmanaged: []", "tests:\n  - tests/\nunmanaged: []");
+    let r = rig_with(&[
+        ("specs/mini/sdd.md", sdd),
+        (
+            "specs/mini/units/U-001-one.md",
+            unit_md_with("U-001", &["src/one.txt"], &[], &["sh tests/pre.sh"]),
+        ),
+        ("tests/pre.sh", "test -f src/one.txt\n".to_string()),
+    ]);
+    let seq = r.claim_and_then("U-001", "60", |wt| {
+        write(wt, "src/one.txt", "artifact\n");
+        write(wt, "tests/pre.sh", "true\n");
+    });
+    let head = r.main_head();
+    let outcome = r.integrate("U-001", seq);
+    let Outcome::RejectedWriteSet { paths, detail } = outcome else {
+        panic!("expected RejectedWriteSet, got {outcome:?}");
+    };
+    assert_eq!(paths, vec!["tests/pre.sh".to_string()]);
+    assert!(
+        detail.contains("a pre-existing test (§6 tests:) — no unit's work may change it"),
+        "{detail}"
+    );
+    assert_eq!(r.main_head(), head);
 }
 
 #[test]

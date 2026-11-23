@@ -256,6 +256,7 @@ A project run is only as sound as the repository it builds. vitrify enforces wha
 - **Make every command safe beside other SDDs' commands.** Commands of different SDDs run at once, so none may rely on a fixed port, a shared directory, or a global lock.
 - **Reproduce upstream outputs in every checkout.** Each gate starts from a pristine checkout of mainline, with untracked and ignored files removed. What a downstream SDD needs from an upstream is committed by the upstream's units or rebuilt by the downstream's Bootstrap; nothing may depend on a file another checkout left behind. Keep tool caches outside the checkout.
 - **Give repository-wide inputs an owner, or list them.** A file outside every SDD's `scope_roots` is an input of every unit, so a change to it re-checks everything. Put shared build inputs under an SDD the others depend on, or list the paths an SDD's commands read in its `shared_inputs`.
+- **List each SDD's tests.** A test owned by a unit that other SDDs depend on re-checks every one of them when it changes, unless it is listed in `tests:`; listed, it re-checks only its own SDD.
 - **Bound each suite's parallelism.** A §5 Test command or Verification row takes one gate token, so a runner that fans out across every core on its own needs its own cap.
 
 ## Size the Pools

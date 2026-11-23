@@ -523,7 +523,7 @@ Reads:   ~/.vitrify/templates/ ($VITRIFY_HOME; an override on disk wins)
 Writes:  the working tree, in the current directory: tdd → NAME.md (default tdd.md);
          sdd → NAME/ bundle with sdd.md, units/, contracts/, changelog.md, decisions.md;
          sdd --single → NAME.sdd.md (default NAME scope). An SDD declares
-         schema_version: 2.1. Never overwrites.
+         schema_version: 2.2. Never overwrites.
 Prints:  the created path; stderr: `next: fill <path> per vitrify schema show, then run
          vitrify lint --sdd <path>` (sdd), `next: fill <path> per vitrify schema show --tdd`
          (tdd)
@@ -545,7 +545,7 @@ Examples:
 pub const SCHEMA_SHOW: &str = "\
 Reads:   ~/.vitrify/schemas/ ($VITRIFY_HOME; an override on disk wins)
 Writes:  nothing in the repository; restores or refreshes its copy under ~/.vitrify/
-Prints:  the SDD schema (schema_version 2.1), or with --tdd the TDD schema
+Prints:  the SDD schema (schema_version 2.2), or with --tdd the TDD schema
 Exit status: 0 printed · 1 the file cannot be read · 2 usage error
 Config:  VITRIFY_HOME
 Examples:

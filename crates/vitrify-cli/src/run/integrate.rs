@@ -1375,8 +1375,11 @@ impl Integrator {
 /// What a gate checked or read, beyond protocol state: the units whose
 /// rows ran and everything they depend on, the SDD's unmanaged files, the
 /// paths outside every scope it takes as input, and — when it ran the §5
-/// Test command — the SDD's whole scope. A commit that changed nothing of
-/// it cannot change the gate's verdict.
+/// Test command — the SDD's whole scope. A test path (§6 `tests:`) counts
+/// only for a gate of its own SDD: a generated test when its owner is
+/// checked or the suite ran, a pre-existing test always; another SDD's test
+/// paths are never read. A commit that changed nothing of it cannot change
+/// the gate's verdict.
 #[derive(Debug, Clone)]
 pub struct Footprint {
     /// The gated SDD's slug.
@@ -1415,6 +1418,14 @@ impl Footprint {
         match self.ownership.classify(path) {
             Owner::Spec(s) => s == self.slug,
             Owner::Unit(n) => self.checked.contains(&n) || (self.suite && n.slug == self.slug),
+            Owner::Test {
+                slug: s,
+                unit: Some(n),
+            } => s == self.slug && (self.checked.contains(&n) || self.suite),
+            Owner::Test {
+                slug: s,
+                unit: None,
+            } => s == self.slug,
             Owner::Unmanaged(s) => s == self.slug,
             Owner::Outside => self.ownership.takes_outside(&self.slug, path),
         }
@@ -1762,4 +1773,47 @@ fn stamp_verified(inst: &Instance, unit: &model::Unit, commit: &str) -> Result<(
         yamlish::set_map_in_place(&b, "trace", &trace_map)
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vitrify_core::cascade::SddOwnership;
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_gate_reads_test_paths_of_its_own_sdd_only() {
+        let ownership = Ownership::new(vec![
+            SddOwnership {
+                slug: "a".into(),
+                tests: strings(&["t/a/"]),
+                units: vec![("U-001".into(), strings(&["src/a.rs", "t/a/own.rs"]))],
+                ..Default::default()
+            },
+            SddOwnership {
+                slug: "b".into(),
+                units: vec![("U-001".into(), strings(&["src/b.rs"]))],
+                ..Default::default()
+            },
+        ]);
+        let footprint = |slug: &str, checked: &[Node]| Footprint {
+            slug: slug.into(),
+            checked: checked.iter().cloned().collect(),
+            suite: true,
+            ownership: ownership.clone(),
+            spec: SpecFiles::default(),
+        };
+        // b's gate checked a U-001's code, never a's tests
+        let b = footprint("b", &[Node::new("b", "U-001"), Node::new("a", "U-001")]);
+        assert!(b.reads("src/a.rs"));
+        assert!(!b.reads("t/a/own.rs"));
+        assert!(!b.reads("t/a/pre.rs"));
+        // a's own gate reads both its generated and its pre-existing test
+        let a = footprint("a", &[Node::new("a", "U-001")]);
+        assert!(a.reads("t/a/own.rs"));
+        assert!(a.reads("t/a/pre.rs"));
+    }
 }

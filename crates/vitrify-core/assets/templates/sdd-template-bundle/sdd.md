@@ -1,7 +1,7 @@
 ---
 sdd: [scope-slug]
 title: [Title]
-schema_version: 2.1
+schema_version: 2.2
 version: 0.1.0
 status: Draft
 tdd: ../../docs/tdd/[scope].md
@@ -48,8 +48,12 @@ every unit's reading set and of the `global` trace hash.]
 ## System Layout & Ownership
 
 [Target layout table: every path under `scope_roots` owned by exactly one
-unit, or listed here:]
+unit, listed under `tests:`, or listed `unmanaged`. List every test file
+under `tests:` — a test a unit owns is generated with it; a test no unit
+owns is pre-existing, written by you and read-only to the build:]
 
+tests:
+  - [tests/scope/]
 unmanaged:
   - [path-no-unit-owns]
 

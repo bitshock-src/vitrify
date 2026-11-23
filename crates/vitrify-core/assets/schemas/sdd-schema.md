@@ -56,7 +56,7 @@ Every SDD begins with machine-readable front matter:
 ---
 sdd: checkout-core            # stable slug; never reused
 title: Checkout Core Service
-schema_version: 2.1           # required: the version of this schema
+schema_version: 2.2           # required: the version of this schema
 version: 1.4.0                # semver of this SDD document
 status: Active                # Draft | Active | Deprecated
 tdd: ./tdd/checkout-core.md   # the one TDD this SDD is derived from
@@ -75,7 +75,7 @@ Rules:
 * `status` lifecycle: `Draft` (being authored; units may be incomplete) → `Active` (living: built and maintained under §12) → `Deprecated` (retired; kept for history). There is no "Done": an Active SDD with all units Verified is simply fully built *at its current version*.
 * `tdd` and `tdd_version` MUST identify a single TDD revision: `tdd` is the TDD's path, written from the directory of the SDD's core file; `tdd_version` begins with the revision it pins. An SDD is `Active` only against the current revision of an `Approved` TDD (TDD schema, Document Metadata). Re-pinning to a newer TDD revision is a change entry.
 * `version` and `updated` MUST be those of the last change entry (§12): the version it goes to, and its date.
-* `schema_version` is required, and names the version of this schema the instance is written to: `2.1`. A reader MUST refuse an instance that declares a version it does not read, or declares none, naming the version it reads. A pin in `depends_on` (§8) is read only in a `2.1` document; every `2.0` document reads the same under `2.1`.
+* `schema_version` is required, and names the version of this schema the instance is written to: `2.2`. A reader MUST refuse an instance that declares a version it does not read, or declares none, naming the versions it reads. A pin in `depends_on` (§8) is read only in a `2.1` or later document, and a `tests:` list (§6) only in a `2.2` document; every `2.0` and `2.1` document reads the same under `2.2`.
 * `shared_inputs` is optional: repository-relative paths or globs, outside every SDD's `scope_roots`, that this SDD's commands actually read (`shared_inputs: [tools/, ci/shared.env]`). It narrows which outside paths re-check this SDD's units (§11); without it, every path outside every scope counts, and a declared empty list excludes them all.
 * All dates are ISO `YYYY-MM-DD`.
 
@@ -184,7 +184,10 @@ The full file tree of the governed tree, with every path assigned to exactly one
 | src/checkout/index.ts         | U-001  | composition root           |
 | src/checkout/cart/*           | U-004  |                            |
 | src/checkout/payment/*        | U-009  |                            |
-| tests/checkout/cart/*         | U-004  | tests live with their unit |
+| tests/checkout/cart/*         | U-004  | generated with U-004       |
+| tests/checkout/acceptance/*   | —      | pre-existing               |
+tests:
+  - tests/checkout/
 unmanaged:
   - vendor/
 ```
@@ -192,11 +195,11 @@ unmanaged:
 Rules:
 
 * **Exclusive**: every path is owned by exactly one unit. Two units MUST NOT own the same path; glob patterns MUST NOT overlap.
-* **Exhaustive**: any file under `scope_roots` that git would commit — tracked, or untracked and not ignored — and that is neither owned nor listed `unmanaged` is an **orphan** — an audit violation (§11). Files git ignores (dependencies, build output, caches) are outside the governed tree and need no entry.
+* **Exhaustive**: any file under `scope_roots` that git would commit — tracked, or untracked and not ignored — and that is not owned, not listed `unmanaged`, and not a test path is an **orphan** — an audit violation (§11). Files git ignores (dependencies, build output, caches) are outside the governed tree and need no entry.
 * Units write only inside their owned paths (plus their own status fields, §8). Reading anything is allowed; *depending* on another unit's internals is not — cross-unit consumption goes through contracts only (§7).
-* Test files are paths like any other: the unit that owns one may write it, and no other unit may (§13.3). Who owns the tests — and whether anyone does — is how an SDD states its test posture (§10).
+* **Tests** (schema 2.2): `tests:` lists the SDD's test files — paths or globs inside `scope_roots`, matched as `owns` globs are. For writing, a test path is a path like any other: the unit that owns it may write it, and no other unit may (§13.3). A test path no unit owns is **pre-existing**: no unit's work may change it. A change to a test path reaches units of its own SDD only (§11). A `tests:` entry MUST lie inside `scope_roots` and MUST NOT overlap `unmanaged`. A path another SDD's commands read — a test helper another SDD's tests import — is not a test of this SDD and MUST NOT be listed.
 * `unmanaged` is reserved for committed tool-generated or vendored paths that no unit edits by hand. No unit's work may change an `unmanaged` path either (§10, write-set check): tool output a build regenerates belongs in `.gitignore`.
-* The ownership map is part of the stable core: changing it is a change entry, MINOR or MAJOR per §2.
+* The ownership map is part of the stable core: changing it is a change entry, MINOR or MAJOR per §2, except the editorial changes §12 names.
 
 ---
 
@@ -354,28 +357,28 @@ Gates are exact command sequences; passing them is the only way a unit advances.
 
 ### Test posture
 
-Whether tests exist before the build, whether a unit's Verification runs existing tests, and whether building a unit includes writing tests are the author's choices, made per unit. This schema has no default. A posture is expressed only through regions defined elsewhere — ownership (§6), each unit's Requirements, Implementation and Verification (§8), and `depends_on` (§9) — and every gate treats a test file exactly like any other file.
+Whether a unit is verified by tests, and who writes them, is the author's choice, encoded in ownership. This schema has no default and no posture field: `tests:` (§6) says which files are tests, and ownership says who writes them. A unit whose Verification runs no tests needs neither.
 
-| Posture | Who owns the tests (§6) | What the unit's Verification runs (§8) |
+| Posture | Who owns the test files (§6) | Who writes them |
 | --- | --- | --- |
-| No tests | — | checks that are not test runs: build output, a smoke run, file and format checks |
-| The unit writes its tests | the unit itself | the tests it writes, as its Implementation prescribes |
-| A test unit writes them first | a test unit consuming the contracts its tests exercise; each implementation unit lists it in `depends_on` | the test unit's tests |
-| Written before the build, governed by this SDD | a unit already `Verified` when the build starts (the authored baseline), consuming the contracts its tests exercise | those tests |
-| Written before the build, outside this SDD | nobody: they lie outside `scope_roots` | those tests |
-| Existing tests the SDD does not use | whoever owns them — nobody, outside `scope_roots` | nothing — and the §5 Test command leaves them out: then no gate runs them, and the build can break them unnoticed |
+| Generated | the unit that writes them; its Implementation names each test and what it asserts | that unit's implementer, and again whenever the unit is rebuilt |
+| Pre-existing | no unit | the author, before the build and between builds; no unit's work may change them |
 
-Postures mix freely across units — acceptance tests written before the build alongside unit tests each unit writes, for example. These rules hold in every posture:
+Postures mix freely — a pre-existing acceptance suite beside generated unit tests, for example. These rules hold in both:
 
 * **Units are judged only by their gates.** A unit advances on the gates of this section — its Verification table plus each gate's fixed steps — and on nothing else. The §5 Test command is among those steps only as the integration gate's regression check: no unit has to make it pass, and no build has to start with it passing — but a unit may not break it, and a build is not complete while it fails.
-* **Only a test's owner may change it.** The write-set check rejects every other unit's change to it, and a test no unit owns is read-only for the entire build. Edits made outside the build are caught only when they make a Verified unit's checks fail (§11, check 4).
-* **Tests reach other units' code through contracts.** When a test owned by one unit imports a module another unit owns, the test's unit MUST consume a contract naming that module (§7) — which also stales the tests whenever the contract changes. The audit never reads code, so a boundary checker the SDD runs is what checks this (§5).
-* **Ready and Stale units are rebuilt by implementers.** Any Ready or Stale unit can be claimed, and its implementer may rewrite every file the unit owns. Tests that only the author may write therefore belong to a unit that is Verified when the build starts — when a change entry stales that unit, the author updates and re-stamps it before building resumes — or lie outside `scope_roots`.
-* **Verified checks keep passing.** A Verified unit's Verification commands run again whenever a change reaches it since its last recorded check (§11) — at a build's preflight, at a later integration, in a re-check — at every later integration of an SDD with no §5 Test command, and in the drift audit (§11, check 4), so they MUST pass in every later state — for a baseline, starting before the code its tests judge exists. A test unit or baseline whose tests judge other units' code is therefore verified with checks that hold both before and after that code exists (the tests load; they are lint-clean) — never with "the tests fail".
+* **Only a test's owner may change it.** The write-set check rejects every other unit's change to a test, and every unit's change to a pre-existing test. Edits made outside the build are caught when they make a Verified unit's checks fail (§11, check 4).
+* **Who runs a test depends on who writes it.** A unit whose Verification runs tests another unit owns SHOULD list that unit in `depends_on`: the tests then exist before the rows that run them, and a change to them re-checks the units that run them (§11). Without the edge, such a change reaches those units only through the §5 Test command. Tests that many units run, whatever their dependencies, are better pre-existing: a change to a pre-existing test re-checks every unit of its SDD. A test unit that implementation units depend on is the generated posture.
+* **Tests stay in their SDD.** A change to a test path re-checks units of its own SDD only (§11).
+* **Tests reach other units' code through contracts.** When a generated test imports a module another unit owns, the test's unit MUST consume a contract naming that module (§7) — which also stales the tests whenever the contract changes. A pre-existing test has no unit: a change entry that changes a contract updates the pre-existing tests that exercise it, in the same change. The audit never reads code, so a boundary checker the SDD runs is what checks this (§5).
+* **Ready and Stale units are rebuilt by implementers.** Any Ready or Stale unit can be claimed, and its implementer may rewrite every file the unit owns, generated tests included. Tests that only the author may write are pre-existing.
+* **Verified checks keep passing.** A Verified unit's Verification commands run again whenever a change reaches it since its last recorded check (§11) — at a build's preflight, at a later integration, in a re-check — at every later integration of an SDD with no §5 Test command, and in the drift audit (§11, check 4), so they MUST pass in every later state, starting, for tests of code not yet built, before that code exists. A test unit whose tests judge other units' code is therefore verified with checks that hold both before and after that code exists (the tests load; they are lint-clean) — never with "the tests fail".
 * **Absence fails.** A Verification command that runs tests SHOULD fail when the code it judges is absent: a test that skips instead lets a unit pass by not existing.
 * **Checks stand alone.** Verification commands — one unit's, and different units' — MAY be run in any order and side by side. Each SHOULD therefore pass on its own, whatever else is running: it relies on nothing another command leaves behind and changes nothing another reads (its own temp directories and ports; no shared scratch state). An SDD whose checks cannot be made independent says so in Ground Rules (§4), and its gates are run one command at a time.
 * **Tests-first is the unit's own instruction.** A unit MAY require tests-first: its Implementation says to run its Verification commands, observe them fail, then implement. The implementer carries this out; no gate observes or records the failing run.
 * **State it where implementers read.** Ground Rules (§4) SHOULD state the SDD's test posture, so that it is in every unit's reading set.
+
+An SDD below 2.2 has no `tests:` list. It keeps tests from the build either with a unit that is `Verified` when the build starts and owns them — an authored baseline, which the author re-stamps after a change entry stales it — or by leaving them outside `scope_roots`.
 
 ---
 
@@ -423,7 +426,7 @@ trace:                   # SHA-256, hex, MAY be displayed truncated to 12 chars
 A unit's **anchor** is the commit of its latest `verified` journal event, from an integration or from a re-check. It is part of build state, beside the trace, and answers a second question about a Verified unit: not "is what it is built from unchanged" but "is what it is checked against unchanged".
 
 * **The trace decides regeneration.** When a unit's trace moves (its entry, a consumed contract, the global regions), the unit is Stale and is built again.
-* **The anchor decides re-checking.** A Verified unit is re-checked, with no rebuild, when a path it is checked against changed since its anchor: its own files, the files of every unit in its `depends_on` closure (through pins too), its SDD's `unmanaged` files, and every path outside every SDD's scope — or, when its SDD lists `shared_inputs` (§2), only those outside paths. A passing re-check appends a `verified` event with the actor `recheck` and the checked commit, which moves the anchor and changes no unit's state.
+* **The anchor decides re-checking.** A Verified unit is re-checked, with no rebuild, when a path it is checked against changed since its anchor: its own files; the files of every unit in its `depends_on` closure (through pins too), except test paths of another SDD (§6); its SDD's test paths that no unit owns; its SDD's `unmanaged` files; and every path outside every SDD's scope — or, when its SDD lists `shared_inputs` (§2), only those outside paths. A passing re-check appends a `verified` event with the actor `recheck` and the checked commit, which moves the anchor and changes no unit's state.
 * The SDD's §5 Test command has an anchor of its own: the commit of the latest `audit` event that carries `suite: pass`, recorded by an integration or a re-check. Its recorded pass holds until a path that any unit of the SDD is checked against changes; then it runs again.
 * A unit regenerated into byte-identical files changes no path, so nothing that depends on it is re-checked.
 * The code of another unit never regenerates a unit: a unit is built from contracts, not from its dependencies' code. What a dependency's code change can break is whether the unit still passes its checks, which only a re-check answers.
@@ -486,6 +489,7 @@ Rules:
 * **Backflow.** When building reveals the spec wrong or incomplete, the implementer reports it and edits no spec text — the write-set check (§10) rejects work that does. A correction confined to the claiming unit's own non-contract spec text MAY be landed by the integrator with that unit's integration, as a PATCH/MINOR entry recorded in the same change; anything touching contracts, §5, §6, or other units MUST stop at a `Q-###` and wait for an authored version (§3, §7).
 * **Changes that cross SDDs.** A change to a contract that other SDDs pin (§7) is a change entry of the producing SDD, and then — once each pin is brought in step (`vitrify pin sync`) — one change entry of each consuming SDD, with its own version bump and its own staleness marks. No SDD's entry marks another SDD's units.
 * Adding a pin to `depends_on` to record a need the unit's built code already has is editorial: PATCH. The pin is already in the unit's `consumes`, and the unit's code is unchanged.
+* Moving a unit's test paths out of its `owns`, to make them pre-existing tests listed in `tests:` (§6), is editorial: PATCH. The unit's built code is unchanged; the edit only takes the tests out of the build's hands. Adding a `tests:` list, and setting `schema_version: 2.2` for it, is PATCH too, and stales nothing: neither §6 nor the front matter is a trace input.
 * Removing scope: retired units get status `Retired`; the change entry states what artifacts are deleted, and the deletion is executed at integration of that entry.
 * Growth is normal: new features arrive as new units and contracts under MINOR/MAJOR entries. The SDD is never "finished", only fully built at its current version.
 
@@ -517,9 +521,9 @@ Run before an SDD (or a new version of one) goes Active. Each line is pass/fail.
       green once it does (or `none`)
 - [ ] §6 ownership is exclusive and exhaustive over scope_roots
 - [ ] Test posture stated in Ground Rules and encoded in ownership and
-      Verification (§10); tests only the author may write are owned by a unit
-      Verified before the build, or lie outside scope_roots; a unit whose
-      tests import other units' modules consumes their contracts
+      Verification (§10); every test file listed in `tests:` (§6), and
+      tests only the author may write owned by no unit; a unit whose tests
+      import other units' modules consumes their contracts
 - [ ] Every cross-boundary surface appears in exactly one contract; every
       Consumers line names exactly the units that consume it
 - [ ] Every pin matches the authority it names; every transcription

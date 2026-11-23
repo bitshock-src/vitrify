@@ -119,9 +119,14 @@ everything committed, pins synced (`vitrify pin sync --all`), and
   Technology Decisions. A change entry marks it Stale.
 * **Re-checked (no model call):** a Verified unit whose code inputs moved
   since its last check: its own files, the files of the units it depends on
-  (through pins too), its SDD's unmanaged files, and paths outside every
-  scope (or only its SDD's `shared_inputs`). Another SDD's code change
-  therefore re-checks its dependents and regenerates none of them.
+  (through pins too) — except test paths, which re-check only their own
+  SDD — its SDD's unmanaged files, and paths outside every SDD's scope (or only
+  its SDD's `shared_inputs`). Another SDD's code change therefore re-checks
+  its dependents and regenerates none of them; another SDD's test change
+  re-checks none of them.
+* **Pre-existing tests** (listed in §6 `tests:`, owned by no unit) are the
+  author's: a change to a contract they exercise updates them in the same
+  commit, because no worker may.
 * A unit regenerated into identical files changes no path, so nothing
   downstream of it is re-checked.
 * `vitrify run --dry-run` prints both, with the changed paths behind each

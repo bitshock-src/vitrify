@@ -227,7 +227,7 @@ impl Recheck {
         let set: BTreeSet<&Node> = reasons
             .iter()
             .filter_map(|r| match &r.owner {
-                Owner::Unit(n) => Some(n),
+                Owner::Unit(n) | Owner::Test { unit: Some(n), .. } => Some(n),
                 _ => None,
             })
             .collect();

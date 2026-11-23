@@ -110,6 +110,7 @@ fn seeded_fixtures_across_sdds_report_exactly_their_own_findings() {
         ("lint-L1-pins", "L1"),
         ("lint-L12", "L12"),
         ("lint-L12-self-pin", "L12"),
+        ("lint-tests", "L2"),
     ] {
         let tmp = tempfile::tempdir().unwrap();
         copy_dir(
@@ -861,4 +862,26 @@ fn home() -> &'static Path {
         home
     })
     .path()
+}
+
+#[test]
+fn l2_tests_entries_name_cause_and_remediation() {
+    let tmp = tempfile::tempdir().unwrap();
+    copy_dir(&repo_root().join("fixtures/seeded/lint-tests"), tmp.path());
+    let root = tmp.path().canonicalize().unwrap();
+    vitrify(&root)
+        .args(["lint", "--sdd", "specs/new"])
+        .assert()
+        .code(2)
+        .stdout(
+            "[L2] docs/new/: tests: entry `docs/new/` lies outside scope_roots → narrow `docs/new/` to a path under scope_roots, or remove it from tests:\n\
+             [L2] tests/new/: tests: entry `tests/new/` and unmanaged: entry `tests/new/gen/` can match a common path → narrow one of them so no path is both a test and unmanaged\n",
+        );
+    vitrify(&root)
+        .args(["lint", "--sdd", "specs/old"])
+        .assert()
+        .code(2)
+        .stdout(
+            "[L2] tests:: §6 lists tests:, and this SDD declares schema_version 2.1 — a tests: list is schema 2.2 → set schema_version: 2.2 in the SDD's core front matter (a PATCH change entry), or remove the tests: list\n",
+        );
 }

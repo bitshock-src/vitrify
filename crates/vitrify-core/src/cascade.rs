@@ -25,11 +25,16 @@
 //!
 //! * the files owned by the unit and by every unit in its dependency closure
 //!   (transitive `depends_on`, across SDDs through pins — computed by the
-//!   caller, [`Closures`]);
-//! * its SDD's `unmanaged:` files, and any path inside the SDD's
-//!   `scope_roots` that no unit owns and that is not listed unmanaged (the
-//!   conservative reading: nobody vouches for it, so it counts as the SDD's
-//!   unmanaged input);
+//!   caller, [`Closures`]) — except test paths of another SDD: a test path
+//!   (a path a pattern of an SDD's §6 `tests:` list matches, schema 2.2)
+//!   reaches units of its own SDD only. A **generated** test, one a unit
+//!   owns, reaches its owner and the units of the owner's SDD whose closure
+//!   contains the owner;
+//! * its SDD's `unmanaged:` files, its SDD's **pre-existing** tests (test
+//!   paths no unit owns: they reach every unit of the SDD), and any path
+//!   inside the SDD's `scope_roots` that no unit owns, that is not a test
+//!   path and that is not listed unmanaged (the conservative reading: nobody
+//!   vouches for it, so it counts as the SDD's unmanaged input);
 //! * paths outside every SDD's `scope_roots` — or, when the unit's SDD
 //!   declares `shared_inputs` in its front matter, only the outside paths
 //!   those patterns match.
@@ -44,25 +49,33 @@
 //!
 //! [`Ownership`] is built once from the repository's SDDs and classifies a
 //! repository-relative path as [`Owner::Spec`], [`Owner::Unit`],
-//! [`Owner::Unmanaged`] or [`Owner::Outside`]. Patterns match as `owns` does
-//! ([`audit::matches`]): an exact path, a shell-style glob, or a directory
-//! prefix (a trailing `/` is allowed). Exclusive ownership makes overlaps a
+//! [`Owner::Test`], [`Owner::Unmanaged`] or [`Owner::Outside`]. Patterns
+//! match as `owns` does ([`audit::matches`]): an exact path, a shell-style
+//! glob, or a directory prefix (a trailing `/` is allowed). Exclusive ownership makes overlaps a
 //! lint error elsewhere; here they resolve deterministically, in this order:
 //!
 //! 1. an SDD's own files ([`Owner::Spec`]) — whatever a glob matches, as the
 //!    write-set law has it. Nested SDDs: the longest matching spec path
 //!    wins, then the smaller slug;
-//! 2. a unit's `owns`, SDDs by slug and units by id: the first match wins;
-//! 3. an SDD's `unmanaged:`, by slug: the first match wins;
-//! 4. an SDD's `scope_roots`, by slug: the first match is that SDD's
+//! 2. a unit's `owns`, SDDs by slug and units by id: the first match wins —
+//!    a generated test ([`Owner::Test`] with the unit) when the unit's own
+//!    SDD lists the path under `tests:`, the unit's file ([`Owner::Unit`])
+//!    otherwise;
+//! 3. an SDD's `tests:`, by slug: the first match is that SDD's
+//!    pre-existing test ([`Owner::Test`] with no unit). Overlapping lists of
+//!    two SDDs are not linted; the smaller slug wins;
+//! 4. an SDD's `unmanaged:`, by slug: the first match wins;
+//! 5. an SDD's `scope_roots`, by slug: the first match is that SDD's
 //!    unmanaged input ([`Owner::Unmanaged`]);
-//! 5. [`Owner::Outside`].
+//! 6. [`Owner::Outside`].
 //!
 //! # Dirty
 //!
 //! [`dirty_set`] maps each changed path to its owner once, then marks a
 //! Verified unit dirty when an owner is the unit itself or in its closure, or
-//! is [`Owner::Unmanaged`] of the unit's own SDD, or is [`Owner::Outside`]
+//! is [`Owner::Unmanaged`] of the unit's own SDD, or is a generated test of
+//! the unit's own SDD whose owner is the unit or in its closure, or is a
+//! pre-existing test of the unit's own SDD, or is [`Owner::Outside`]
 //! (and, if the SDD declares `shared_inputs`, matched by one of its
 //! patterns; a declared empty list excludes every outside path). A Verified
 //! unit with **no anchor** — no `verified` event, or one without a commit,
@@ -138,6 +151,9 @@ pub enum Owner {
     Spec(String),
     /// A file a unit owns.
     Unit(Node),
+    /// A test path of the SDD `slug`: generated, with `unit` its owner, or
+    /// pre-existing, with `unit` `None`.
+    Test { slug: String, unit: Option<Node> },
     /// A file the SDD, by slug, lists `unmanaged:` — or lies under its
     /// `scope_roots` and nobody owns.
     Unmanaged(String),
@@ -146,12 +162,17 @@ pub enum Owner {
 }
 
 impl Owner {
-    /// `spec of <slug>`, `unit <slug> <unit>`, `unmanaged in <slug>` or
-    /// `outside every scope`, as a report names an owner.
+    /// `spec of <slug>`, `unit <slug> <unit>`, `test of unit <slug> <unit>`,
+    /// `pre-existing test of <slug>`, `unmanaged in <slug>` or `outside every
+    /// scope`, as a report names an owner.
     pub fn describe(&self) -> String {
         match self {
             Owner::Spec(slug) => format!("spec of {slug}"),
             Owner::Unit(node) => format!("unit {node}"),
+            Owner::Test {
+                unit: Some(node), ..
+            } => format!("test of unit {node}"),
+            Owner::Test { slug, unit: None } => format!("pre-existing test of {slug}"),
             Owner::Unmanaged(slug) => format!("unmanaged in {slug}"),
             Owner::Outside => "outside every scope".to_string(),
         }
@@ -167,6 +188,9 @@ pub struct SddOwnership {
     pub scope_roots: Vec<String>,
     /// The `unmanaged:` globs of its System Layout & Ownership section.
     pub unmanaged: Vec<String>,
+    /// The `tests:` globs of the same section: read at schema 2.2 or later,
+    /// empty below.
+    pub tests: Vec<String>,
     /// Each unit's id and its `owns` globs.
     pub units: Vec<(String, Vec<String>)>,
     /// `shared_inputs` from front matter: `None` when the SDD declares none
@@ -177,7 +201,8 @@ pub struct SddOwnership {
 
 impl SddOwnership {
     /// Read `inst`'s declarations (`root` is the repository root `inst` was
-    /// loaded under). Reads the SDD's core file for its `unmanaged:` list.
+    /// loaded under). Reads the SDD's core file for its `unmanaged:` list,
+    /// and its `tests:` list when the SDD declares schema 2.2 or later.
     pub fn of(slug: &str, inst: &Instance, root: &Path) -> Result<SddOwnership, CoreError> {
         let core_text = model::read_text(&inst.file)?;
         Ok(SddOwnership {
@@ -185,6 +210,11 @@ impl SddOwnership {
             spec_paths: writeset::spec_paths(inst, root),
             scope_roots: inst.meta.get_list("scope_roots"),
             unmanaged: audit::unmanaged_globs(&core_text),
+            tests: if inst.schema().tests_list() {
+                audit::tests_globs(&core_text)
+            } else {
+                Vec::new()
+            },
             units: inst
                 .units
                 .iter()
@@ -291,8 +321,23 @@ impl Ownership {
         for s in &self.sdds {
             for (unit, owns) in &s.units {
                 if owns.iter().any(|g| covers(path, g)) {
-                    return Owner::Unit(Node::new(&s.slug, unit));
+                    let node = Node::new(&s.slug, unit);
+                    if s.tests.iter().any(|g| covers(path, g)) {
+                        return Owner::Test {
+                            slug: s.slug.clone(),
+                            unit: Some(node),
+                        };
+                    }
+                    return Owner::Unit(node);
                 }
+            }
+        }
+        for s in &self.sdds {
+            if s.tests.iter().any(|g| covers(path, g)) {
+                return Owner::Test {
+                    slug: s.slug.clone(),
+                    unit: None,
+                };
             }
         }
         for s in &self.sdds {
@@ -393,6 +438,14 @@ fn reasons(
         .filter(|(path, owner)| match owner {
             Owner::Spec(_) => false,
             Owner::Unit(n) => relevant.contains(n),
+            Owner::Test {
+                slug: s,
+                unit: Some(n),
+            } => s == slug && relevant.contains(n),
+            Owner::Test {
+                slug: s,
+                unit: None,
+            } => s == slug,
             Owner::Unmanaged(s) => s == slug,
             Owner::Outside => ownership.takes_outside(slug, path),
         })
@@ -541,6 +594,7 @@ mod tests {
             spec_paths: vec![format!("specs/{slug}")],
             scope_roots: scope.iter().map(|s| s.to_string()).collect(),
             unmanaged: Vec::new(),
+            tests: Vec::new(),
             units: units
                 .iter()
                 .map(|(u, o)| (u.to_string(), o.iter().map(|g| g.to_string()).collect()))

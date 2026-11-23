@@ -147,15 +147,44 @@ fn owned_globs(units: &[Unit]) -> Vec<(String, Vec<String>)> {
     out
 }
 
-/// The `unmanaged:` globs of an SDD's core text (its `System Layout &
-/// Ownership` section).
+/// The `unmanaged:` globs of an SDD's core text (§6).
 pub fn unmanaged_globs(core_text: &str) -> Vec<String> {
+    layout_list(core_text, "unmanaged:")
+}
+
+/// The `tests:` globs of an SDD's core text (§6, schema 2.2).
+pub fn tests_globs(core_text: &str) -> Vec<String> {
+    layout_list(core_text, "tests:")
+}
+
+/// Whether a `tests:` entry lies inside `scope_roots` (lint L2): a scope
+/// root is the repository root (`.` or empty), or one matches the entry's
+/// literal prefix — the text before its first `*`, `?` or `[`, the whole
+/// entry when it has none — with trailing `/` removed.
+pub fn tests_entry_in_scope(entry: &str, scope_roots: &[String]) -> bool {
+    let entry = entry.trim();
+    let literal = match entry.find(['*', '?', '[']) {
+        Some(i) => &entry[..i],
+        None => entry,
+    };
+    let prefix = literal.trim_end_matches('/');
+    scope_roots.iter().any(|r| {
+        let root = r.trim().trim_start_matches("./");
+        root.is_empty() || root == "." || matches(prefix, root)
+    })
+}
+
+/// The items of the list `key` (`unmanaged:`, `tests:`, …) in an SDD's
+/// `System Layout & Ownership` section: the line whose trimmed text is
+/// `key`, then each following indented `- item` line, until the first other
+/// line. The list may sit inside a fenced block.
+fn layout_list(core_text: &str, key: &str) -> Vec<String> {
     let sec = model::section(core_text, "System Layout & Ownership");
     let mut out = Vec::new();
     let mut in_block = false;
     for line in crate::newline::split_universal(sec) {
         if !in_block {
-            if line.trim_end() == "unmanaged:" || line.trim() == "unmanaged:" {
+            if line.trim_end() == key || line.trim() == key {
                 in_block = true;
             }
             continue;
@@ -416,10 +445,16 @@ pub fn run(
     // 1. Orphans
     let owns = owned_globs(units);
     let unmanaged = unmanaged_globs(&core_text);
+    let tests = if inst.schema().tests_list() {
+        tests_globs(&core_text)
+    } else {
+        Vec::new()
+    };
     let all_globs: Vec<&String> = owns
         .iter()
         .flat_map(|(_, gs)| gs.iter())
         .chain(unmanaged.iter())
+        .chain(tests.iter())
         .collect();
     let scope_files = match &opts.scope_files {
         Some(files) => files.clone(),

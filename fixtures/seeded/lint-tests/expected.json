@@ -1,0 +1,19 @@
+{
+  "findings": [
+    {
+      "sdd": "new",
+      "check": "L2",
+      "subject": "docs/new/"
+    },
+    {
+      "sdd": "new",
+      "check": "L2",
+      "subject": "tests/new/"
+    },
+    {
+      "sdd": "old",
+      "check": "L2",
+      "subject": "tests:"
+    }
+  ]
+}

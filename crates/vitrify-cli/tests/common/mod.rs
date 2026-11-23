@@ -11,6 +11,11 @@
 //! Seeded on `main` in two commits, as an integration does it: the code
 //! (the anchor every `verified` event records), then the stamps, journals
 //! and ledgers.
+//!
+//! [`Project::with_tests`] builds the same repository with alpha at a given
+//! schema, listing `a/tests/` under §6 `tests:`: alpha U-001 also owns the
+//! test `a/tests/t1.txt` (generated), and nobody owns `a/tests/pre.txt`
+//! (pre-existing).
 
 #![allow(dead_code)]
 
@@ -40,9 +45,10 @@ pub fn write(dir: &Path, rel: &str, content: &str) {
     std::fs::write(p, content).unwrap();
 }
 
-fn sdd_md(slug: &str, scope: &str, test: &str) -> String {
+/// An SDD's core file; `tests` is §6 text before its `unmanaged:` line.
+fn sdd_md(slug: &str, schema: &str, scope: &str, test: &str, tests: &str) -> String {
     format!(
-        "---\nsdd: {slug}\nschema_version: 2.1\ntitle: {slug}\nversion: 1.0.0\nstatus: Active\nscope_roots:\n  - {scope}\n---\n\n# {slug}\n\n## Ground Rules\n\nG.\n\n## Technology Decisions\n\nT.\n\n### Commands\n\n- Bootstrap: `true`\n- Build:     `true`\n- Test:      `{test}`\n- Lint:      `true`\n\n## System Layout & Ownership\n\nunmanaged: []\n"
+        "---\nsdd: {slug}\nschema_version: {schema}\ntitle: {slug}\nversion: 1.0.0\nstatus: Active\nscope_roots:\n  - {scope}\n---\n\n# {slug}\n\n## Ground Rules\n\nG.\n\n## Technology Decisions\n\nT.\n\n### Commands\n\n- Bootstrap: `true`\n- Build:     `true`\n- Test:      `{test}`\n- Lint:      `true`\n\n## System Layout & Ownership\n\n{tests}unmanaged: []\n"
     )
 }
 
@@ -70,6 +76,19 @@ pub const UNITS: [(&str, &str); 4] = [
 
 impl Project {
     pub fn new() -> Project {
+        Project::build(None)
+    }
+
+    /// The repository of [`Project::new`], with alpha declaring
+    /// `schema_version: <schema>` and listing `a/tests/` under §6 `tests:`;
+    /// alpha U-001 also owns `a/tests/t1.txt`, and `a/tests/t1.txt` and
+    /// `a/tests/pre.txt` are committed with the code.
+    pub fn with_tests(schema: &str) -> Project {
+        Project::build(Some(schema))
+    }
+
+    /// The shared builder: `tests` is alpha's schema when it lists tests.
+    fn build(tests: Option<&str>) -> Project {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("repo");
         let home = tmp.path().join("vhome");
@@ -78,11 +97,22 @@ impl Project {
         std::fs::create_dir_all(tmp.path().join("t")).unwrap();
         std::fs::write(home.join("config.toml"), vitrify_core::content::CONFIG.body).unwrap();
         let root = root.canonicalize().unwrap();
-        let files: Vec<(&str, String)> = vec![
-            ("specs/alpha/sdd.md", sdd_md("alpha", "a/", "test -f a/one.txt")),
+        let (alpha_schema, alpha_tests, alpha_owns) = match tests {
+            None => ("2.1", "", "a/one.txt"),
+            Some(schema) => (
+                schema,
+                "tests:\n  - a/tests/\n",
+                "a/one.txt, a/tests/t1.txt",
+            ),
+        };
+        let mut files: Vec<(&str, String)> = vec![
+            (
+                "specs/alpha/sdd.md",
+                sdd_md("alpha", alpha_schema, "a/", "test -f a/one.txt", alpha_tests),
+            ),
             (
                 "specs/alpha/units/U-001-one.md",
-                unit_md("U-001", "a/one.txt", "", "", "grep -q one a/one.txt"),
+                unit_md("U-001", alpha_owns, "", "", "grep -q one a/one.txt"),
             ),
             (
                 "specs/alpha/units/U-002-two.md",
@@ -92,7 +122,10 @@ impl Project {
                 "specs/alpha/contracts/C-001-greeting.md",
                 "# C-001 \u{2014} Greeting file\n\n- Producer: U-001\n- Consumers: \u{2014}\n- Stability: Frozen\n\n## Surface\n\n```text\n# a/one.txt\none\n```\n".to_string(),
             ),
-            ("specs/beta/sdd.md", sdd_md("beta", "b/", "test -f b/one.txt")),
+            (
+                "specs/beta/sdd.md",
+                sdd_md("beta", "2.1", "b/", "test -f b/one.txt", ""),
+            ),
             (
                 "specs/beta/units/U-001-one.md",
                 unit_md("U-001", "b/one.txt", "C-001", "C-001", "test -f b/one.txt"),
@@ -110,6 +143,10 @@ impl Project {
             ("b/one.txt", "b one\n".to_string()),
             ("b/two.txt", "b two\n".to_string()),
         ];
+        if tests.is_some() {
+            files.push(("a/tests/t1.txt", "t1\n".to_string()));
+            files.push(("a/tests/pre.txt", "pre\n".to_string()));
+        }
         for (rel, content) in &files {
             write(&root, rel, content);
         }
@@ -177,6 +214,30 @@ impl Project {
             event: event.to_string(),
             unit: unit.map(str::to_string),
             actor: Some(actor.to_string()),
+            sdd: "1.0.0".to_string(),
+            commit: Some(commit.to_string()),
+            ..Default::default()
+        };
+        journal::append_line(&handle, &journal::render_line(&e)).unwrap();
+    }
+
+    /// Append an `audit` event recording a pass of the §5 Test command of
+    /// the SDD at `sdd`, anchored at `commit`: its suite anchor.
+    pub fn suite_pass(&self, sdd: &str, commit: &str) {
+        let handle = model::resolve_sdd(
+            &self.root,
+            Some(&self.root.join(sdd).to_string_lossy()),
+            &self.root,
+        )
+        .unwrap();
+        let (events, _) = journal::read(&handle).unwrap();
+        let e = Event {
+            seq: journal::next_seq(&events),
+            at: UtcTime::now().format(),
+            event: "audit".to_string(),
+            actor: Some("audit".to_string()),
+            findings: Some(0),
+            suite: Some("pass".to_string()),
             sdd: "1.0.0".to_string(),
             commit: Some(commit.to_string()),
             ..Default::default()

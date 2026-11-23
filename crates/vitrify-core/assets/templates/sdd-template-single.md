@@ -1,7 +1,7 @@
 ---
 sdd: [scope-slug]
 title: [Title]
-schema_version: 2.1
+schema_version: 2.2
 version: 0.1.0
 status: Draft
 tdd: ./[path-to-tdd].md
@@ -63,6 +63,8 @@ scope_roots:
 | [path or glob] | U-001 | [note] |
 
 ```
+tests:
+  - [tests/scope/]
 unmanaged:
   - [tool-generated-path/]
 ```

@@ -347,6 +347,11 @@ fn new_materializes_and_refuses_overwrite() {
     ] {
         assert!(env.cwd.join("calcb").join(f).exists(), "missing {f}");
     }
+    for f in ["calc.sdd.md", "calcb/sdd.md"] {
+        let text = std::fs::read_to_string(env.cwd.join(f)).unwrap();
+        assert!(text.contains("schema_version: 2.2"), "{f}");
+        assert!(text.lines().any(|l| l.trim() == "tests:"), "{f}");
+    }
     vitrify(&env).args(["new", "sdd", "calcb"]).assert().code(2);
 }
 

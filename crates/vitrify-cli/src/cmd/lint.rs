@@ -202,6 +202,45 @@ pub fn check_all(inst: &Instance, root: &Path, budget: i64) -> Result<Vec<Findin
     }
     let core_text = model::read_text(&inst.file)?;
     let unmanaged = unmanaged_globs(&core_text);
+    let tests = audit::tests_globs(&core_text);
+    let tests_counted = inst.schema().tests_list();
+    if tests_counted {
+        let scope_roots = inst.meta.get_list("scope_roots");
+        for t in &tests {
+            if !audit::tests_entry_in_scope(t, &scope_roots) {
+                findings.push(f(
+                    "L2",
+                    t.clone(),
+                    format!("tests: entry `{t}` lies outside scope_roots"),
+                    format!("narrow `{t}` to a path under scope_roots, or remove it from tests:"),
+                ));
+            }
+        }
+        for t in &tests {
+            for u in &unmanaged {
+                if globs_overlap(t, u) {
+                    findings.push(f(
+                        "L2",
+                        t.clone(),
+                        format!(
+                            "tests: entry `{t}` and unmanaged: entry `{u}` can match a common path"
+                        ),
+                        "narrow one of them so no path is both a test and unmanaged",
+                    ));
+                }
+            }
+        }
+    } else if !tests.is_empty() {
+        let version = inst.schema().as_str();
+        findings.push(f(
+            "L2",
+            "tests:",
+            format!(
+                "§6 lists tests:, and this SDD declares schema_version {version} — a tests: list is schema 2.2"
+            ),
+            "set schema_version: 2.2 in the SDD's core front matter (a PATCH change entry), or remove the tests: list",
+        ));
+    }
     // the governed tree: what git would commit (its ignore rules decide,
     // whatever the ecosystem); outside a repository, every file on disk
     let scope_files = super::governed_files(root, inst)
@@ -210,7 +249,8 @@ pub fn check_all(inst: &Instance, root: &Path, budget: i64) -> Result<Vec<Findin
         let owned = owns
             .iter()
             .any(|(_, gs)| gs.iter().any(|g| audit::matches(file, g)))
-            || unmanaged.iter().any(|g| audit::matches(file, g));
+            || unmanaged.iter().any(|g| audit::matches(file, g))
+            || (tests_counted && tests.iter().any(|g| audit::matches(file, g)));
         if !owned {
             findings.push(f(
                 "L2",
