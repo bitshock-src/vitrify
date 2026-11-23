@@ -26,13 +26,11 @@ at `Q-###` rather than guess**.
 Follow the authoring procedure — `vitrify brief authoring` — end to end:
 the PRD routed and the human interviewed, TDD to Approved, SDD to Active
 (gated by `vitrify lint`), and the test posture decided and encoded — with
-any tests written now checked in and their unit stamped as the authored
-baseline.
+any pre-existing tests checked in and listed in §6 `tests:`, and any unit you built by hand stamped Verified.
 
 ## 2. Commit
 
-Claims are mainline transactions: commit the SDD, and any authored
-baseline, at the mainline head before any build work starts.
+Claims are mainline transactions: commit the SDD, its pre-existing tests, and any unit you built by hand, at the mainline head before any build work starts.
 
 **Gate**: no uncommitted changes under the SDD's root.
 

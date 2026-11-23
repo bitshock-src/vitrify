@@ -1,0 +1,8 @@
+{
+  "findings": [
+    {
+      "check": 1,
+      "subject": "src/orphan.txt"
+    }
+  ]
+}

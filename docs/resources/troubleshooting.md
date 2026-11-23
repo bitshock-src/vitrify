@@ -81,7 +81,7 @@ A verb that acts on one SDD exits 4 when it finds none, or when it finds several
 
 - **None found.** The refusal names where to start: `error: no SDD found in repository → start one: vitrify brief authoring (or vitrify new sdd inside specs/)`. An SDD counts only if its front matter has an `sdd` key. Discovery searches `specs/*/sdd.md`, then `specs/*.sdd.md`, then the files git would commit — so an SDD under an ignored path is never found.
 - **Several found.** The refusal prints the candidates as `--sdd` values (`--sdd specs/alpha`, …). Pass one of them, or `--all` on the verbs that take it: `lint`, `check`, `audit`, `ledger`, `pin`, `journal replay`, `change apply`, and `questions`.
-- **Found but refused.** This vitrify reads `schema_version` `2.0` and `2.1`, and the key is required. An SDD that lacks it or declares another version is still listed by `locate`, and every verb that would read it exits 4 with a message naming both, such as `error: <file>: schema_version is missing; this vitrify reads 2.0 and 2.1 → vitrify schema show`. Write the SDD to the schema and declare `schema_version: 2.1` in its core front matter; see [Versioning](../reference/formats.md#10-versioning).
+- **Found but refused.** This vitrify reads `schema_version` `2.0`, `2.1` and `2.2`, and the key is required. An SDD that lacks it or declares another version is still listed by `locate`, and every verb that would read it exits 4 with a message naming both, such as `error: <file>: schema_version is missing; this vitrify reads 2.0 and 2.1 → vitrify schema show`. Write the SDD to the schema and declare `schema_version: 2.1` in its core front matter; see [Versioning](../reference/formats.md#10-versioning).
 
 ## No Run Recorded, or No Output Kept
 

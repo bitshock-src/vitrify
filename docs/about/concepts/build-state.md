@@ -71,8 +71,8 @@ A unit's **anchor** is the commit of its latest `verified` journal event: its in
 
 A Verified unit is **dirty** when a commit since its anchor changed a path in this list:
 
-- the files it owns, and the files of every unit it depends on, transitively — locally, and across SDDs through pins;
-- its SDD's `unmanaged:` files, and any path inside the SDD's scope roots that no unit owns;
+- the files it owns, and the files of every unit it depends on, transitively — locally, and across SDDs through pins — except test paths of another SDD (§6 `tests:`), which re-check only their own SDD;
+- its SDD's `unmanaged:` files, its pre-existing tests, and any path inside the SDD's scope roots that no unit owns;
 - paths outside every SDD's scope — or only those its SDD lists in `shared_inputs`, when it lists any. A declared empty list excludes every outside path.
 
 Spec files never dirty a re-check: a path under an SDD's own root is an input of the regeneration cascade only. A change therefore marks every transitive dependent of the units whose files it touched, and no other unit. The resolver computes each unit's closure once, and `git diff` runs once per distinct anchor, so units integrated in the same commit share one diff.
@@ -155,5 +155,5 @@ These are the boundaries of what the recorded state tells you.
 - Record a change entry's bookkeeping with `vitrify change apply`, not by hand.
 - Let a run re-check dirty units rather than re-running every row by hand; `vitrify run --recheck` is the deliberate way to distrust the record.
 - Run `vitrify check` after any state change made outside `vitrify run`; it includes `vitrify journal replay` and `vitrify ledger regen --check`.
-- Pair every `trace record` of an authored baseline with the matching `journal append` and a `ledger regen`, then commit.
+- Pair every `trace record` of a unit you ship already built with the matching `journal append` and a `ledger regen`, then commit.
 - Treat a lapsed lease as harmless: the next claim supersedes it, and the fencing token keeps the old holder's work out.

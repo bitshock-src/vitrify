@@ -19,7 +19,7 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 : The seven mechanical drift checks run by `vitrify audit`: orphans, ghosts, contract references, rotten Verified, trace mismatch, projection consistency, and lapsed leases. See [Gates](../about/concepts/gates.md).
 
 **Authored baseline**
-: A unit that ships Verified before the build starts — typically tests written at authoring time — stamped with vitrify's own state verbs, never by hand. See [Test Posture](../about/concepts/test-posture.md).
+: A unit shipped Verified, built by hand, and stamped with vitrify's own state verbs, never by hand-editing. Before schema 2.2 it was the way to keep tests from the build; from 2.2, tests only you may write are pre-existing tests, and a unit you build by hand is simply shipped already built. See [Test Posture](../about/concepts/test-posture.md).
 
 **Authority**
 : The contract a pin stands for: a contract owned by another SDD in the same repository. See [Contracts](../about/concepts/contracts.md).
@@ -138,6 +138,9 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 **Gate pool**
 : The one pool of `run.gate_jobs` tokens that every §5 command and Verification row of every gate, re-check, head check, preflight, and culprit probe in a run takes from, served by priority and then by arrival; `run.gate_jobs = 0`, the default, is one token per CPU core. Each command holds one token; how it parallelizes inside itself is its project's business. See [Gates](../about/concepts/gates.md) and [Support Matrix](../reference/support-matrix.md#platforms).
 
+**Generated test**
+: A test path that a unit's `owns` also matches. That unit is its owner: it writes the test, and again whenever the unit is rebuilt. See [Test Posture](../about/concepts/test-posture.md).
+
 **Ghost**
 : A Built or Verified unit whose `owns` globs match no file (audit check 2).
 
@@ -222,6 +225,9 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 
 **Preflight**
 : The checks `vitrify run` and kickoff perform before anything starts. A failure of the run as a whole refuses the start (exit code 2, or 4 for an SDD at schema 2.0 whose units consume pins); a failure of one lane's own checks refuses a run of one SDD, and in a project run blocks only that lane, as `[<slug>] preflight failed: <cause> → <fix>`, while the other lanes build. `vitrify run --dry-run` performs all of it.
+
+**Pre-existing test**
+: A test path that no unit owns. The author writes it, before the build and between builds, and no unit's work may change it. A change to it re-checks every Verified unit of its SDD. See [Test Posture](../about/concepts/test-posture.md).
 
 **Primary checkout**
 : Your own checkout of the repository. vitrify never builds or gates in it; when it has mainline checked out, a run fast-forwards it commit by commit and never resets it.
@@ -312,8 +318,11 @@ Use this page when a term in another page is unfamiliar. These definitions are t
 **Technology Decisions**
 : The SDD region (§5) that pins the language, runtime, and every dependency version, and lists the §5 Commands.
 
+**Test path**
+: A file or glob listed under `tests:` in §6 System Layout & Ownership of an SDD at schema 2.2 or later. A change to a test path re-checks units of its own SDD only. See [Test Posture](../about/concepts/test-posture.md).
+
 **Test posture**
-: How a unit is verified — whether tests exist before the build, are written by the unit or by a test unit, or are not used — chosen per unit and expressed only through ownership and Verification tables. See [Test Posture](../about/concepts/test-posture.md).
+: Whether a test is generated (owned by the unit that writes it) or pre-existing (owned by no unit), set by ownership; there is no posture field. A unit whose Verification runs no tests needs neither. See [Test Posture](../about/concepts/test-posture.md).
 
 **Trace (input trace)**
 : A unit's `trace:` map of hashes — the first 12 hex characters of a SHA-256 per input: `unit`, each consumed `C-###`, and `global` — recorded when the unit is stamped. A mismatch makes the unit Stale.

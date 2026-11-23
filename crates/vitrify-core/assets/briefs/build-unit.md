@@ -94,7 +94,7 @@ the integration gate will catch later and reject.
 
 1. Tests are whatever the unit's spec says they are. Write exactly the tests
    its Implementation prescribes, inside your `owns` paths, and none it does
-   not. Tests you do not own are read-only: one you believe wrong is a spec
+   not. Tests you do not own are read-only — another unit's, and pre-existing tests (listed in §6 `tests:`, owned by no unit), which only the author changes: one you believe wrong is a spec
    conflict — a `Q-###` (step 6), never an edit.
 2. Where the unit requires tests-first, run its Verification commands and
    observe them fail before implementing.

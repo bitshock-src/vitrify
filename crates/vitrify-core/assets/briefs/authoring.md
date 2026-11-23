@@ -150,20 +150,19 @@ current revision of an Approved TDD).
 
 ## 4. Decide the test posture
 
-Decide, per unit, how it is verified: whether tests exist before the build,
-whether its Verification runs them, and whether building the unit includes
-writing tests. There is no default, and postures mix across units. Encode
-the decision in the spec itself — ownership and Verification are what the
-gates enforce (SDD schema §10, Test posture):
+Decide, per test file, who writes it. There is no default, and postures
+mix. List every test file of the SDD in §6 `tests:`, then encode who writes
+each in ownership — the gates enforce it (SDD schema §10, Test posture):
 
 | Posture | Encode it as |
 | --- | --- |
-| No tests | Verification rows that are not test runs: build output, a smoke run, file or format checks |
-| The unit writes its tests | the unit owns its test files; its Implementation names each test and what it asserts; its Verification runs them |
-| A test unit writes them first | a test unit owns and prescribes them, consumes the contracts they exercise, and is verified by checks that hold before and after the code exists (the tests load; lint is clean); implementation units `depends_on` it and run its tests |
-| Tests written now, governed by the SDD | a baseline unit owns them, consumes the contracts they exercise, and ships `Verified` (below); implementation units run them |
-| Existing tests outside the SDD | they stay outside `scope_roots`; Verification runs them; no unit can change them |
-| Existing tests the SDD does not use | nothing — keep them out of the Test command too, and no gate runs them, so the build can break them unnoticed; reference them in Verification, or let Test run them, to make them count |
+| Generated: the build writes the tests | the unit that writes them owns them; its Implementation names each test and what it asserts; a unit whose rows run another unit's tests (a shared harness, a test unit) lists that unit in `depends_on` — tests that many units run are better pre-existing |
+| Pre-existing: you write them now, and the build never changes them | they are listed in `tests:` and no unit owns them; implementation units run them |
+
+A unit with nothing to test is verified by rows that are not test runs:
+build output, a smoke run, file or format checks. Tests that neither the
+Test command nor any row runs are run by no gate, and the build can break
+them unnoticed.
 
 Then:
 
@@ -176,11 +175,13 @@ Then:
 4. Route tests through contracts: a unit whose tests import another unit's
    module consumes a contract naming that module, which also stales the
    tests when it changes. Only a boundary checker the SDD runs can verify
-   this; vitrify does not read code.
+   this; vitrify does not read code. A pre-existing test has no unit: when a
+   change entry changes a contract it exercises, update the test in the same
+   change.
 5. Keep Verified checks passing: a Verified unit's Verification commands
    re-run whenever a change reaches them (at preflight, at each later
    integration gate, in a re-check batch), so they must hold in every later
-   state — a baseline's from before the code its tests judge
+   state — a pre-existing test's from before the code it judges
    exists. The Test command is held to the same standard from the moment it
    first passes: Verification rows pick tests one by one and cannot see a
    suite that no longer collects, or another unit's test that broke.
@@ -192,17 +193,14 @@ Then:
 7. Gitignore build and test byproducts: the handoff commits every change git
    does not ignore, and the write-set check rejects any file the unit does
    not own — `unmanaged` paths included.
-8. Tests written now and governed by the SDD: ship their unit `Verified` as
-   the authored baseline — `vitrify trace record --unit U-001 --stamp built`,
+8. Leave a path out of `tests:` when another SDD's commands read it — a
+   test helper another SDD's tests import. A test path's changes re-check
+   only its own SDD's units.
+9. A unit you build by hand ships `Verified`: `vitrify trace record --unit U-001 --stamp built`,
    then `--stamp verified`, the matching `vitrify journal append` events,
-   `vitrify ledger regen`, commit. A Ready or Stale unit is claimable, so a
-   test unit left unstamped — or staled by a later change entry — is rebuilt
-   by an implementer unless you re-stamp it first.
+   `vitrify ledger regen`, commit.
 
-**Gate**: `vitrify lint` passes (L6: every requirement has a check); every
-test written now fails without the code it judges, run the way the
-implementation units' Verification runs it, while its baseline unit's own
-checks pass; after stamping a baseline, `vitrify journal replay` exits 0.
+**Gate**: `vitrify lint` passes (L6: every requirement has a check); every pre-existing test fails without the code it judges, run the way the implementation units' Verification runs it; after stamping a unit by hand, `vitrify journal replay` exits 0.
 
 ## 5. Preflight
 

@@ -554,7 +554,7 @@ fn schema_versions_read_and_refuse() {
     for block in [
         "schema_version: 1.0\n",
         "schema_version: 1.1\n",
-        "schema_version: 2.2\n",
+        "schema_version: 2.3\n",
         "schema_version: 3.0\n",
         "schema_version: 2.1.0.1\n",
         "schema_version: one\n",
@@ -576,7 +576,7 @@ fn schema_versions_read_and_refuse() {
     assert_eq!(err.exit_code(), 4);
     assert!(
         err.to_string()
-            .contains("schema_version 1.1 is not one this vitrify reads (2.0 and 2.1)"),
+            .contains("schema_version 1.1 is not one this vitrify reads (2.0, 2.1 and 2.2)"),
         "{err}"
     );
     bundle(&repo, "bare", "schema_version: —\n", &[]);
@@ -584,9 +584,29 @@ fn schema_versions_read_and_refuse() {
     assert_eq!(err.exit_code(), 4);
     assert!(
         err.to_string()
-            .contains("schema_version is missing; this vitrify reads 2.0 and 2.1"),
+            .contains("schema_version is missing; this vitrify reads 2.0, 2.1 and 2.2"),
         "{err}"
     );
+}
+
+#[test]
+fn schema_2_2_is_read() {
+    let meta = |block: &str| model::Meta(vitrify_core::yamlish::parse(block));
+    for block in ["schema_version: 2.2\n", "schema_version: 2.2.3\n"] {
+        assert_eq!(model::schema_of(&meta(block)), Ok(Schema::V2_2), "{block}");
+    }
+    assert_eq!(
+        model::schema_of(&meta("schema_version: 2.3\n")),
+        Err(model::SchemaRefusal::Unread("2.3".to_string()))
+    );
+    for s in Schema::READ {
+        assert_eq!(s.tests_list(), s == Schema::V2_2, "{s:?}");
+        assert_eq!(
+            s.pins_in_depends_on(),
+            matches!(s, Schema::V2_1 | Schema::V2_2),
+            "{s:?}"
+        );
+    }
 }
 
 #[test]

@@ -22,7 +22,7 @@ Use this list to find which source governs a question.
 
 ### 1.2 Schema Version
 
-Every SDD declares `schema_version` in its core front matter — the bundle's `sdd.md`, or the single file. This vitrify reads two versions: `2.0` (written `2`, `2.0`, or `2.0.x`) and `2.1` (written `2.1` or `2.1.x`). In 2.1 a unit's `depends_on` may name a pin of its own SDD, to wait for the units that produce the pinned contract in another SDD; every 2.0 document means the same under 2.1, and a pin in a 2.0 SDD's `depends_on` is a lint L1 finding. A missing key or any other value is refused with exit 4, and the message names the versions this vitrify reads; `vitrify locate` still lists the refused SDD, so it is seen. Templates that `vitrify new sdd` materializes declare `2.1`. When the version changes is set out in [§10 Versioning](#10-versioning).
+Every SDD declares `schema_version` in its core front matter — the bundle's `sdd.md`, or the single file. This vitrify reads three versions: `2.0` (written `2`, `2.0`, or `2.0.x`), `2.1` (written `2.1` or `2.1.x`) and `2.2` (written `2.2` or `2.2.x`). In 2.1 a unit's `depends_on` may name a pin of its own SDD, to wait for the units that produce the pinned contract in another SDD; every 2.0 document means the same under 2.1, and a pin in a 2.0 SDD's `depends_on` is a lint L1 finding. In 2.2 the SDD's §6 System Layout & Ownership may list its tests under `tests:` (§3.6); every 2.0 and 2.1 document means the same under 2.2, and a `tests:` list below 2.2 is a lint L2 finding. A missing key or any other value is refused with exit 4, and the message names the versions this vitrify reads; `vitrify locate` still lists the refused SDD, so it is seen. Templates that `vitrify new sdd` materializes declare `2.2`. When the version changes is set out in [§10 Versioning](#10-versioning).
 
 ## 2. Instance Shapes and Discovery
 
@@ -59,6 +59,17 @@ A contract's header is the bullet lines between its title and its first section 
 ### 3.5 Claimable Predicate
 
 **Claimable predicate** (derived, never stored): every `depends_on` entry is built — a unit entry is Built or Verified, and a pin entry (schema 2.1) stands for the units named on its authority's `Producer:` line, each of which must be Built or Verified — AND (status ∈ {Ready, Stale} OR (Claimed with lease lapsed)). Lease expiry is advisory; the fencing token is the correctness mechanism [locking].
+
+### 3.6 SDD Layout List: `tests`
+
+From schema 2.2, §6 System Layout & Ownership may list the SDD's test files under `tests:`. The list is read from the `System Layout & Ownership` section of the core file: a line whose trimmed text is `tests:`, then each following line that begins with whitespace and whose trimmed text begins with `- `, the item being the text after `- `, trimmed. The list ends at the first other line. It may sit inside a fenced block, as `unmanaged:` may.
+
+```
+tests:
+  - tests/checkout/
+```
+
+The list is read only in a document that declares 2.2 or later (§1.2); below that it is ignored in every behavior except lint. It is not a trace input. It is read by the re-check cascade (§6), by the orphan checks, by lint L2 and by the write-set check. What the list means for ownership and re-checking is in [Test Posture](../about/concepts/test-posture.md).
 
 ## 4. Trace Hash Recipe
 
@@ -187,7 +198,7 @@ The **escalation verdict** is a single JSON object, `{"verdict":"retry|release|b
 These rules say what a release may change and how the formats on this page tell versions apart.
 
 - **vitrify is at 0.y.z.** Any release may change any command, flag, output, exit code, file format, or state file, with no deprecation period, no alias, and no step that carries an older file forward [semver-web] [unreleased-api]. Agents learn the interface from the installed binary in each session, so a release leaves no stale copy of it behind [poehnelt].
-- **`schema_version` is required in every SDD** (§1.2). A vitrify reads the schema versions it names (this one: 2.0 and 2.1) and refuses any other with exit 4, naming the versions it reads; `vitrify locate` lists the refused SDD.
+- **`schema_version` is required in every SDD** (§1.2). A vitrify reads the schema versions it names (this one: 2.0, 2.1 and 2.2) and refuses any other with exit 4, naming the versions it reads; `vitrify locate` lists the refused SDD.
 - **A change to the document format or to the trace recipe raises `schema_version`** and regenerates the golden corpus in the same reviewed change. An unintended change to either is a bug, which the goldens catch.
 - **State under `~/.vitrify/` belongs to the installed version.** Unmodified content refreshes through the manifest; a file this version cannot read is an error that names the command that rewrites it.
 - **The [Release Notes](../about/release-notes.md) say briefly what each release changed.** No other page carries change history [ecs-changelog] [intel-spec-update].
@@ -215,12 +226,12 @@ Use this table to find the code that implements each format and the oracle files
 | Trace (§4) | `crates/vitrify-core/src/trace.rs` | `fixtures/golden/calc/trace-U-*.json` |
 | Reading set (§5) | `crates/vitrify-core/src/readset.rs` | `fixtures/golden/calc/readset-U-*.json`, `fixtures/golden/pin-multi/readset-*.json` |
 | Journal (§6) | `crates/vitrify-core/src/journal.rs` | `fixtures/golden/calc/replay.json` |
-| Anchors, dirty sets, and `shared_inputs` (§3.3, §6) | `crates/vitrify-core/src/cascade.rs` | `fixtures/seeded/project-cascade/` |
+| Anchors, dirty sets, and `shared_inputs` (§3.3, §6) | `crates/vitrify-core/src/cascade.rs` | `fixtures/seeded/project-cascade/`, `crates/vitrify-core/tests/cascade.rs` |
 | The unit graph across SDDs (§1.2, §3.5) | `crates/vitrify-core/src/graph.rs` | `fixtures/seeded/project-pipeline/`, `fixtures/seeded/project-cycle/`, `fixtures/seeded/project-schema20/` |
 | Ledger (§7) | `crates/vitrify-core/src/ledger.rs` | `fixtures/golden/calc/ledger.md`, `fixtures/golden/calc/progress.txt` |
 | External contracts (§8) | `crates/vitrify-core/src/contract.rs` | `fixtures/seeded/pin-multi/`, `fixtures/golden/pin-multi/` |
 | Audit findings | `crates/vitrify-core/src/audit.rs` | `fixtures/golden/calc/audit.json`, `fixtures/seeded/audit-*/` |
-| Lint findings | `crates/vitrify-cli/src/cmd/lint.rs` | `fixtures/seeded/lint-L*/` |
+| Lint findings | `crates/vitrify-cli/src/cmd/lint.rs` | `fixtures/seeded/lint-L*/`, `fixtures/seeded/lint-tests/` |
 
 ## Related Topics
 

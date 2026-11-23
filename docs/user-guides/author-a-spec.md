@@ -161,17 +161,26 @@ A cascade can follow only declared dependencies, and declarations are often wron
 
 ## 4. Decide the Test Posture
 
-vitrify takes no position on tests. Decide, per unit, how it is verified — whether tests exist before the build, whether its Verification runs them, and whether building the unit includes writing them — and encode the choice in the spec. Ownership and Verification tables are the whole mechanism; there is no posture setting. [Test Posture](../about/concepts/test-posture.md) lists the postures and the rules they share.
+vitrify takes no position on tests. Decide, per test file, who writes it. There is no default, and postures mix. List every test file of the SDD in §6 `tests:`, then encode who writes each in ownership — the gates enforce it. There is no posture setting. [Test Posture](../about/concepts/test-posture.md) lists the postures and the rules they share.
 
-1. Choose a posture for each unit; postures mix across units.
+| Posture | Encode it as |
+| --- | --- |
+| Generated: the build writes the tests | the unit that writes them owns them; its Implementation names each test and what it asserts; a unit whose rows run another unit's tests (a shared harness, a test unit) lists that unit in `depends_on` — tests that many units run are better pre-existing |
+| Pre-existing: you write them now, and the build never changes them | they are listed in `tests:` and no unit owns them; implementation units run them |
+
+A unit with nothing to test is verified by rows that are not test runs: build output, a smoke run, file or format checks. Tests that neither the Test command nor any row runs are run by no gate, and the build can break them unnoticed.
+
+1. Choose a posture for each test file; postures mix.
 2. State the posture in Ground Rules, so every worker reads it.
 3. Make absence fail: a Verification row that runs tests should fail when the code it judges is missing, while the §5 Test command stays green by skipping those tests. calc does this with `SDD_REQUIRE_IMPL=1` in every generated unit's Verification rows.
-4. Give the tests to an owner: the unit that writes them, a test unit the implementation units depend on, a Verified baseline unit, or nobody (outside `scope_roots`).
-5. If you write tests now and want them locked, ship their unit as an authored baseline (below).
+4. Give the tests to an owner: the unit that writes them, or a test unit the implementation units depend on — or to nobody, for a pre-existing test. A pre-existing test has no unit: when a change entry changes a contract it exercises, update the test in the same change.
+5. Check that every pre-existing test fails without the code it judges, run the way the implementation units' Verification runs it.
+6. Leave a path out of `tests:` when another SDD's commands read it — a test helper another SDD's tests import. A test path's changes re-check only its own SDD's units.
+7. A unit you build by hand ships Verified; the next subsection has the commands. Tests only you may write need no such unit, since they are pre-existing.
 
-### Ship an Authored Baseline
+### Ship a Unit Already Built
 
-To ship tests written now, stamp their unit with vitrify's own state verbs — never by hand — so that its trace, journal, and ledger agree. This is the exact sequence that produced calc's Verified U-001:
+To ship a unit you built by hand, such as calc's U-001, stamp it with vitrify's own state verbs — never by hand — so that its trace, journal, and ledger agree. This is the exact sequence that produced calc's Verified U-001:
 
 ```sh
 vitrify journal append --event change  --entry CH-001 --actor author --commit 0000000
@@ -193,7 +202,7 @@ Run the authoring checks until they pass:
 vitrify lint
 ```
 
-`lint` runs the twelve mechanical checks, L1–L12, and prints `lint clean (L1–L12)` with exit 0 when the SDD passes, or one `[L#] subject: cause → remediation` line per finding with exit 2. If you shipped an authored baseline, use `vitrify lint --built`: plain lint's L7 reports any build state, and a baseline is build state. The [Troubleshooting Guide](../resources/troubleshooting.md#vitrify-lint-reports-findings) maps each check to its usual fix.
+`lint` runs the twelve mechanical checks, L1–L12, and prints `lint clean (L1–L12)` with exit 0 when the SDD passes, or one `[L#] subject: cause → remediation` line per finding with exit 2. If you shipped a unit already built, use `vitrify lint --built`: plain lint's L7 reports any build state, and a built unit is build state. The [Troubleshooting Guide](../resources/troubleshooting.md#vitrify-lint-reports-findings) maps each check to its usual fix.
 
 Then set `status: Active` in the SDD's front matter and commit everything at the mainline head.
 
@@ -217,7 +226,7 @@ The spec is ready to build when every check below passes. Use this table as the 
 | Check | Evidence |
 | --- | --- |
 | The TDD is Approved | its metadata names `Approved` and the revision the SDD pins |
-| Lint is clean | `vitrify lint` (or `--built` with a baseline) prints `lint clean (L1–L12)` and exits 0 |
+| Lint is clean | `vitrify lint` (or `--built` with a unit already built) prints `lint clean (L1–L12)` and exits 0 |
 | The repository is consistent | `vitrify check` prints `check clean: 1 SDD` and exits 0 |
 | Phase 1 is claimable | `vitrify locate --units` marks exactly the Phase-1 units `claimable` |
 | The preflight passes | `vitrify run --dry-run` exits 0 and ends with its `Start:` line |

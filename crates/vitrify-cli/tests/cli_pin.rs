@@ -873,7 +873,7 @@ fn a_schema_version_this_vitrify_does_not_read_is_refused() {
         assert_eq!(ran.code, 4, "{args:?}: {}", ran.stdout);
         assert!(
             ran.stderr
-                .contains("schema_version 1.1 is not one this vitrify reads (2.0 and 2.1)"),
+                .contains("schema_version 1.1 is not one this vitrify reads (2.0, 2.1 and 2.2)"),
             "{args:?}: {}",
             ran.stderr
         );

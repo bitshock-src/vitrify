@@ -361,7 +361,7 @@ fn describe(
     let mut spec_slugs: BTreeSet<String> = BTreeSet::new();
     for p in paths {
         match ownership.classify(p) {
-            Owner::Unit(n) => {
+            Owner::Unit(n) | Owner::Test { unit: Some(n), .. } => {
                 owners.insert(n);
             }
             Owner::Spec(slug) => {

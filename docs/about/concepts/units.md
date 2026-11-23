@@ -51,7 +51,7 @@ Requirements use EARS sentence forms, such as `WHEN the input contains a run of 
 
 ## Ownership
 
-Every file under the SDD's `scope_roots` that git would commit is owned by exactly one unit, through its `owns` globs, or listed under `unmanaged:` in System Layout & Ownership. Lint L2 checks that ownership is exclusive and exhaustive, and a file nobody owns is an orphan (audit check 1). The scans follow git's own ignore rules: an ignored file is never an orphan.
+Every file under the SDD's `scope_roots` that git would commit is owned by exactly one unit, through its `owns` globs, or listed under `unmanaged:` or `tests:` (schema 2.2) in System Layout & Ownership. Lint L2 checks that ownership is exclusive and exhaustive, and a file nobody owns is an orphan (audit check 1). The scans follow git's own ignore rules: an ignored file is never an orphan. A pre-existing test — listed under `tests:`, owned by no unit — is read-only to every unit.
 
 Ownership is also the write rule. A unit's **write-set** is what its `owns` globs match, plus the `status`, `built`, and `trace` fields of its own entry. Before merging, the write-set check rejects any change outside it — another unit's files, `unmanaged` paths, the SDD's own files, or the unit's own spec text — and tests get no exemption. The handoff commits every change git does not ignore, so keep build and test byproducts in `.gitignore`.
 

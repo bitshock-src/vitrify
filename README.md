@@ -61,7 +61,7 @@ A schema, templates, and twelve lint checks turn a design into units that each f
 
 #### Any Language, Any Test Posture
 
-vitrify never reads source code: it judges units by the exit codes of the commands the SDD names and by which file paths changed. Tests may exist before the build, be written by the units, or not exist at all — chosen per unit as its [test posture](docs/about/concepts/test-posture.md) — and every posture runs through the same gates.
+vitrify never reads source code: it judges units by the exit codes of the commands the SDD names and by which file paths changed. Tests may exist before the build (pre-existing, and read-only to it), be written by the units (generated), or not exist at all — chosen per test file as its [test posture](docs/about/concepts/test-posture.md) — and a test change re-checks only its own SDD — and every posture runs through the same gates.
 
 #### Your Harness, Your Login
 

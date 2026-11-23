@@ -89,6 +89,7 @@ fn expected_set(fixture_root: &Path) -> Vec<(i64, String)> {
 fn seeded_fixtures_reproduce_their_finding_sets() {
     for fixture in [
         "audit-orphan",
+        "audit-tests",
         "audit-ghost",
         "audit-escape",
         "audit-rotten",

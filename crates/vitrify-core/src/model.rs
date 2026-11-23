@@ -151,22 +151,25 @@ pub fn front_matter(text: &str) -> Option<Meta> {
 
 /// The schema versions this vitrify reads. 2.1 adds one thing to 2.0: a
 /// unit's `depends_on` may name a pin of its own SDD, to wait for the units
-/// that produce the pinned contract in another SDD. Every 2.0 document means
-/// the same under 2.1.
+/// that produce the pinned contract in another SDD. 2.2 adds one thing to
+/// 2.1: §6 System Layout & Ownership may list the SDD's test files under
+/// `tests:`. Every 2.0 and 2.1 document means the same under 2.2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Schema {
     V2_0,
     V2_1,
+    V2_2,
 }
 
 impl Schema {
     /// Every version this vitrify reads, oldest first.
-    pub const READ: [Schema; 2] = [Schema::V2_0, Schema::V2_1];
+    pub const READ: [Schema; 3] = [Schema::V2_0, Schema::V2_1, Schema::V2_2];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Schema::V2_0 => "2.0",
             Schema::V2_1 => "2.1",
+            Schema::V2_2 => "2.2",
         }
     }
 
@@ -175,8 +178,13 @@ impl Schema {
         self >= Schema::V2_1
     }
 
+    /// Whether §6 may list the SDD's tests (`tests:`).
+    pub fn tests_list(self) -> bool {
+        self >= Schema::V2_2
+    }
+
     /// The versions this vitrify reads, as a refusal names them:
-    /// `2.0 and 2.1`.
+    /// `2.0, 2.1 and 2.2`.
     pub fn read_list() -> String {
         let names: Vec<&str> = Schema::READ.iter().map(|s| s.as_str()).collect();
         match names.split_last() {
@@ -196,7 +204,8 @@ pub enum SchemaRefusal {
 }
 
 /// The schema version an SDD's front matter declares: `2`, `2.0` and
-/// `2.0.x` are 2.0; `2.1` and `2.1.x` are 2.1. The key is required;
+/// `2.0.x` are 2.0; `2.1` and `2.1.x` are 2.1; `2.2` and `2.2.x` are 2.2.
+/// The key is required;
 /// anything else is a version this vitrify does not read.
 pub fn schema_of(meta: &Meta) -> Result<Schema, SchemaRefusal> {
     let raw = meta.get_str("schema_version").unwrap_or("").trim();
@@ -214,6 +223,7 @@ pub fn schema_of(meta: &Meta) -> Result<Schema, SchemaRefusal> {
     match (major, minor) {
         (Some(Some(2)), Some(0)) => Ok(Schema::V2_0),
         (Some(Some(2)), Some(1)) => Ok(Schema::V2_1),
+        (Some(Some(2)), Some(2)) => Ok(Schema::V2_2),
         _ => Err(SchemaRefusal::Unread(raw.to_string())),
     }
 }

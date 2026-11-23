@@ -10,13 +10,14 @@
 //!   `vitrify trace record --stamp built` writes.
 //!
 //! Everything else is rejected: files other units own, `unmanaged` paths,
-//! files no unit owns, and every other file of the SDD. Tests get no special
-//! treatment — a test file is writable exactly when the unit owns it, which
-//! is what makes an SDD's test posture binding.
+//! files no unit owns, and every other file of the SDD. A test file is still
+//! writable exactly when the unit owns it, which is what makes an SDD's test
+//! posture binding; a pre-existing test (one a `tests:` pattern matches that
+//! the unit does not own) is rejected and named as such.
 
 use std::path::Path;
 
-use crate::model::{Instance, Shape, Unit};
+use crate::model::{self, Instance, Shape, Unit};
 use crate::{CoreError, audit, trace};
 
 /// The front-matter fields an implementer's handoff may change in its own
@@ -40,6 +41,9 @@ pub enum Violation {
     /// Not owned by the unit (owned by another unit, `unmanaged`, or owned
     /// by no one).
     NotOwned(String),
+    /// A pre-existing test (matched by the SDD's `tests:` patterns) the unit
+    /// does not own.
+    PreExistingTest(String),
     /// The unit's own spec file changed beyond [`HANDOFF_FIELDS`] (spec
     /// text, or — single shape — anything outside the unit's own fields).
     SpecEdit(String),
@@ -51,7 +55,10 @@ pub enum Violation {
 impl Violation {
     pub fn path(&self) -> &str {
         match self {
-            Violation::NotOwned(p) | Violation::SpecEdit(p) | Violation::SpecFile(p) => p,
+            Violation::NotOwned(p)
+            | Violation::PreExistingTest(p)
+            | Violation::SpecEdit(p)
+            | Violation::SpecFile(p) => p,
         }
     }
 
@@ -59,6 +66,9 @@ impl Violation {
     pub fn describe(&self, unit: &str) -> String {
         match self {
             Violation::NotOwned(p) => format!("{p}: not owned by {unit}"),
+            Violation::PreExistingTest(p) => {
+                format!("{p}: a pre-existing test (§6 tests:) — no unit's work may change it")
+            }
             Violation::SpecEdit(p) => format!(
                 "{p}: spec text edited — only {} may change",
                 HANDOFF_FIELDS.join(", ")
@@ -81,6 +91,8 @@ pub struct WriteSet {
     /// Repo-relative files and directories of the SDD itself; no `owns`
     /// glob covers them.
     pub spec_paths: Vec<String>,
+    /// The SDD's `tests:` patterns (schema 2.2 and later); empty otherwise.
+    pub tests: Vec<String>,
     pub shape: Shape,
 }
 
@@ -122,6 +134,11 @@ impl WriteSet {
             Shape::Bundle => rel(&unit.file, root),
             Shape::Single => rel(&inst.file, root),
         };
+        let tests = if inst.schema().tests_list() {
+            audit::tests_globs(&model::read_text(&inst.file)?)
+        } else {
+            Vec::new()
+        };
         Ok(WriteSet {
             unit: unit.unit.clone(),
             owns: unit
@@ -132,6 +149,7 @@ impl WriteSet {
                 .collect(),
             spec_file,
             spec_paths,
+            tests,
             shape: inst.shape,
         })
     }
@@ -181,7 +199,11 @@ impl WriteSet {
             } else if self.is_spec(path) {
                 out.push(Violation::SpecFile(path.clone()));
             } else if !self.covers(path) {
-                out.push(Violation::NotOwned(path.clone()));
+                if self.tests.iter().any(|g| audit::matches(path, g)) {
+                    out.push(Violation::PreExistingTest(path.clone()));
+                } else {
+                    out.push(Violation::NotOwned(path.clone()));
+                }
             }
         }
         out
